@@ -1,0 +1,566 @@
+<!DOCTYPE HTML>
+<html lang="en">
+	<head>
+		<title>EMERGE-Policy</title>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content="EMERGE-Policy is a graph-structured agentic framework for robot manipulation that coordinates specialized agents, skills, memory, verification, and recovery." />
+
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content="EMERGE-Policy" />
+		<meta property="og:description" content="Emerges beyond a single policy through coordinated perception, prediction, execution, verification, recovery, and memory." />
+		<meta property="og:url" content="https://emerge-policy.github.io/EMERGE-Policy/" />
+		<meta property="og:image" content="https://emerge-policy.github.io/EMERGE-Policy/images/paper/framework.png" />
+		<meta property="og:image:alt" content="System overview of EMERGE-Policy" />
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content="EMERGE-Policy" />
+		<meta name="twitter:description" content="A graph-structured agentic policy framework for robot manipulation." />
+		<meta name="twitter:image" content="https://emerge-policy.github.io/EMERGE-Policy/images/paper/framework.png" />
+
+		<link rel="canonical" href="https://emerge-policy.github.io/EMERGE-Policy/" />
+		<link rel="icon" type="image/png" href="images/paper/emerge-logo.png" />
+		<link rel="stylesheet" href="assets/css/main.css" />
+		<link rel="stylesheet" href="assets/css/phai.css" />
+	</head>
+	<body id="top">
+		<main id="main">
+			<header class="masthead">
+				<div class="title-lockup">
+					<div class="hero-mark">
+						<img src="images/paper/emerge-logo.png" alt="EMERGE-Policy robot mind logo" />
+					</div>
+					<h1 class="title">EMERGE-Policy:</h1>
+				</div>
+				<h2 class="subtitle">A Robot Mind Emerges Beyond a Single Policy</h2>
+
+				<p class="authors">
+					Zhirui Fang<sup>*</sup>, Qingchi Yu<sup>*</sup><sup class="intern-mark">&dagger;</sup>, Ziyang Chen<sup>*</sup>, Longfei Li<sup>*</sup><sup class="intern-mark">&dagger;</sup>, Haoran Ma<sup class="intern-mark">&dagger;</sup>,<br />
+					Keru Zhou, Xinrun Xu, Samith Va, Yuxuan Hu<sup class="intern-mark">&dagger;</sup>, Peixuan Song, Qiang Du,<br />
+					Bin Qian, Yongkang Deng<sup class="intern-mark">&dagger;</sup>, Xin Li<sup class="intern-mark">&dagger;</sup>, Yezhen Wang, Zhe Li, Hao Luo,<br />
+					Shuyan Li, Ziwei Wang, Weijian Deng, Xiu Li<span class="corresponding-mark" title="Corresponding author" aria-label="Corresponding author">&#9993;</span>
+				</p>
+				<p class="affiliations">
+					<span class="affiliation-line">
+						<span class="affiliation-item affiliation-1">Tsinghua University</span>
+						<span class="affiliation-item affiliation-2">Nanjing University of Science and Technology</span>
+						<span class="affiliation-item affiliation-3">Xi'an Jiaotong University</span>
+						<span class="affiliation-item affiliation-4">Xidian University</span>
+					</span>
+					<span class="affiliation-line">
+						<span class="affiliation-item affiliation-5">Harbin Institute of Technology</span>
+						<span class="affiliation-item affiliation-6">Peking University</span>
+						<span class="affiliation-item affiliation-7">Nanyang Technological University</span>
+					</span>
+				</p>
+				<p class="contribution">
+					<sup>*</sup> Equal contribution &nbsp;
+					<sup class="intern-mark legend-mark">&dagger;</sup> Work done during the internship at Tsinghua University &nbsp;
+					<span class="corresponding-mark legend-mark" title="Corresponding author" aria-label="Corresponding author">&#9993;</span> Corresponding author
+				</p>
+
+				<div class="logo-row institution-logos" aria-label="Affiliated institutions">
+					<img src="logos/01_tsinghua_university.png" alt="Tsinghua University" />
+					<img src="logos/03_nanjing_university_of_science_and_technology.png" alt="Nanjing University of Science and Technology" />
+					<img src="logos/05_xian_jiaotong_university.png" alt="Xi'an Jiaotong University" />
+					<img src="logos/06_xidian_university.png" alt="Xidian University" />
+					<img src="logos/07_harbin_institute_of_technology.png" alt="Harbin Institute of Technology" />
+					<img src="logos/08_peking_university.png" alt="Peking University" />
+					<img src="logos/02_nanyang_technological_university.png" alt="Nanyang Technological University" />
+				</div>
+
+				<div class="links">
+					<a href="https://arxiv.org/pdf/2608.29896" class="button special icon fa-file-pdf-o" target="_blank" rel="noopener noreferrer">Paper</a>
+					<a href="https://arxiv.org/abs/2608.29896" class="button icon fa-file-text-o" target="_blank" rel="noopener noreferrer">arXiv</a>
+					<a href="https://github.com/EMERGE-Policy/EMERGE-Policy" class="button icon fa-github" target="_blank" rel="noopener noreferrer">Code</a>
+					<a href="https://thusigsiclab.github.io/thu.github.io/" class="button icon fa-external-link" target="_blank" rel="noopener noreferrer">THU IC Lab</a>
+				</div>
+
+			</header>
+
+			<h3 class="video-section-title">Real-Robot Demonstrations</h3>
+			<div class="hero-clips" aria-label="Project videos">
+				<figure class="hero-clip hero-clip-dual">
+					<div class="hero-compare" aria-label="Complete cup pyramid from two camera angles">
+						<div class="hero-compare-item">
+							<video controls autoplay loop muted playsinline preload="metadata" aria-label="Complete cup pyramid left view">
+								<source src="videos/Real/01_complete_cup_pyramid.mp4" type="video/mp4" />
+							</video>
+						</div>
+						<div class="hero-compare-item">
+							<video controls autoplay loop muted playsinline preload="metadata" aria-label="Complete cup pyramid right view">
+								<source src="videos/Real/01_complete_cup_pyramid_alt_angle.mp4" type="video/mp4" />
+							</video>
+						</div>
+					</div>
+				</figure>
+				<figure class="hero-clip">
+						<video controls autoplay loop muted playsinline preload="metadata" aria-label="Place peach in box video">
+						<source src="videos/Real/02_place_peach_in_box.mp4" type="video/mp4" />
+					</video>
+				</figure>
+				<figure class="hero-clip">
+						<video controls autoplay loop muted playsinline preload="metadata" aria-label="Place plate on box video">
+						<source src="videos/Real/03_place_plate_on_box.mp4" type="video/mp4" />
+					</video>
+				</figure>
+				<figure class="hero-clip">
+						<video controls autoplay loop muted playsinline preload="metadata" aria-label="Place banana on plate video">
+						<source src="videos/Real/04_place_banana_on_plate.mp4" type="video/mp4" />
+					</video>
+				</figure>
+			</div>
+
+				<h3 class="video-section-title">RoboDojo Video Demonstrations</h3>
+				<div class="robodojo-video-grid" aria-label="RoboDojo video demonstrations">
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Arrange largest number">
+							<source src="videos/robodojo/arrange_largest_number.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Arrange largest number</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Build tower">
+							<source src="videos/robodojo/build_tower.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Build tower</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Classify objects">
+							<source src="videos/robodojo/classify_objects.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Classify objects</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Cover blocks">
+							<source src="videos/robodojo/cover_blocks.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Cover blocks</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Fasten screws">
+							<source src="videos/robodojo/fasten_screws.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Fasten screws</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Fill pen holder">
+							<source src="videos/robodojo/fill_pen_holder.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Fill pen holder</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Imitate sorting sequence">
+							<source src="videos/robodojo/imitate_sorting_sequence.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Imitate sorting sequence</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Pack objects into box">
+							<source src="videos/robodojo/pack_objects_into_box.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Pack objects into box</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Pack objects into box randomly">
+							<source src="videos/robodojo/pack_objects_into_box_random.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Pack objects into box (random)</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Play xylophone">
+							<source src="videos/robodojo/play_Xylophone.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Play xylophone</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Pour balls into vase">
+							<source src="videos/robodojo/pour_balls_into_vase.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Pour balls into vase</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Press by number">
+							<source src="videos/robodojo/press_by_number.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Press by number</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Put bottles into dustbin">
+							<source src="videos/robodojo/put_bottles_into_dustbin.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Put bottles into dustbin</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Sort nesting dolls by size">
+							<source src="videos/robodojo/sort_nesting_dolls_by_size.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Sort nesting dolls by size</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Stack blocks">
+							<source src="videos/robodojo/stack_blocks.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Stack blocks</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="Stack bowls">
+							<source src="videos/robodojo/stack_bowls.mp4" type="video/mp4" />
+						</video>
+						<figcaption>Stack bowls</figcaption>
+					</figure>
+				</div>
+				<h3 class="video-section-title">Libero Demonstration</h3>
+				<div class="libero-video-grid" aria-label="Libero demonstrations">
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO rollout">
+							<source src="videos/Libero/Libero/rollout.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO rollout 5">
+							<source src="videos/Libero/Libero/rollout5.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO rollout 6">
+							<source src="videos/Libero/Libero/rollout6.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO Plus rollout 3">
+							<source src="videos/Libero/Libero%20PLus/rollout3.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO-Plus</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO Plus rollout 5">
+							<source src="videos/Libero/Libero%20PLus/rollout5.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO-Plus</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO Plus rollout 7">
+							<source src="videos/Libero/Libero%20PLus/rollout7.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO-Plus</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO Pro rollout">
+							<source src="videos/Libero/Libero%20Pro/rollout.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO-Pro</figcaption>
+					</figure>
+					<figure class="robodojo-clip">
+						<video controls autoplay muted loop playsinline preload="metadata" aria-label="LIBERO Pro rollout 1">
+							<source src="videos/Libero/Libero%20Pro/rollout1.mp4" type="video/mp4" />
+						</video>
+						<figcaption>LIBERO-Pro</figcaption>
+					</figure>
+				</div>
+			<nav class="paper-nav" aria-label="Page sections">
+				<a href="#abstract">Abstract</a>
+				<a href="#method">Method</a>
+				<a href="#results">Results</a>
+				<a href="#deployment">Robot deployment</a>
+				<a href="#analysis">Analysis</a>
+				<a href="#conclusion">Conclusion</a>
+			</nav>
+
+			<figure class="paper-figure teaser">
+				<img src="images/paper/framework.png" alt="System overview showing the Main Agent coordinating Sub Agents and Operational, Imagination, and Evaluation Skills." />
+				<figcaption>System overview of EMERGE-Policy and its coordinated components. The Main Agent coordinates Sub Agents with Operational, Imagination, and Evaluation Skills. Structured evidence guides capability selection, verification, and localized recovery across simulation and embodied execution, producing a system-level policy beyond any single backend.</figcaption>
+			</figure>
+
+			<section id="abstract" class="paper-section">
+				<h3>Abstract</h3>
+				<p class="lead">
+					A robot's effective “mind” need not reside in a single policy. It can emerge when specialized components
+					perceive, reason, predict, act, verify, and remember within a shared orchestration process.
+					<strong>EMERGE-Policy</strong> turns this perspective into a graph-structured agentic framework that
+					coordinates both capability invocation and information exchange.
+				</p>
+				<p>
+					A Main Agent retains task-level state within an active context window, while role-specific Sub Agents
+					process perception, execution monitoring, verification, and memory consolidation in isolated contexts
+					and return structured, task-relevant evidence. The functional Skill interface composes heterogeneous
+					backends as Operational, Imagination, and Evaluation Skills. Criterion-grounded verification, textual
+					failure diagnosis, Branch Stack recovery, and token-aware external memory provide localized correction
+					throughout execution.
+				</p>
+				<p>
+					Without additional fine-tuning, EMERGE-Policy improves several public benchmark results and supports
+					long-horizon real-robot experiments. The results suggest that dividing functional subtasks among
+					collaborating agents, while treating models as callable skills, can extend robot policies beyond
+					isolated rollouts.
+				</p>
+			</section>
+
+			<section class="paper-section">
+				<h3>What emerges?</h3>
+				<div class="insight-grid">
+					<article class="insight-card">
+						<span class="insight-number">01</span>
+						<h4>Coordinate roles</h4>
+						<p>A Main Agent plans and delegates; Perception, Verification, Monitor, and Memory Sub Agents process evidence in task-scoped contexts.</p>
+					</article>
+					<article class="insight-card">
+						<span class="insight-number">02</span>
+						<h4>Compose skills</h4>
+						<p>VLA policies, world models, analytical controllers, and verifiers share a functional interface instead of a single implementation.</p>
+					</article>
+					<article class="insight-card">
+						<span class="insight-number">03</span>
+						<h4>Close the loop</h4>
+						<p>Completion criteria, structured evidence, textual diagnosis, and localized Branch Stack recovery turn execution into an adaptive process.</p>
+					</article>
+				</div>
+			</section>
+
+			<section id="method" class="paper-section">
+				<h3>Method</h3>
+				<p>
+					Given an instruction <em>T</em> and observation <em>O</em><sub>t</sub>, EMERGE-Policy maintains an active
+					task context <em>C</em><sub>t</sub>, decomposes the instruction into criterion-grounded subgoals, and
+					selects the next Sub Agent or Skill. Each subgoal is represented as
+					<strong>&lang;Target, Change, Criterion&rang;</strong>, making the intended state transition and its
+					verification condition explicit.
+				</p>
+				<figure class="paper-figure">
+					<img src="images/paper/workflow.png" alt="Detailed EMERGE-Policy workflow from instruction and observation through memory, recovery, skill execution, and robot feedback." />
+					<figcaption>EMERGE-Policy workflow from instruction to verified execution. The Main Agent maintains active task context and coordinates role-specific Sub Agents with Operational, Imagination, and Evaluation Skills. Structured evidence and Skill outcomes update task state after each interaction: verified successes advance the plan, while failures enter localized Branch Stack recovery before global replanning. Episode memory preserves relevant task state throughout execution.</figcaption>
+				</figure>
+
+				<div class="feature-grid">
+					<article class="feature-card">
+						<div class="feature-icon">◎</div>
+						<h4>Main Agent</h4>
+						<p>Maintains compact global state, invokes capabilities, updates PLAN.md, and chooses retry, recovery, replanning, or termination.</p>
+						<ul>
+							<li>Hierarchical context engineering</li>
+							<li>Criterion-grounded task planning</li>
+							<li>Branch Stack recovery</li>
+						</ul>
+					</article>
+					<article class="feature-card">
+						<div class="feature-icon">◈</div>
+						<h4>Sub-Agent Suite</h4>
+						<p>Runs evidence-intensive work asynchronously in isolated contexts and returns concise, structured results instead of complete traces.</p>
+						<ul>
+							<li>Perception and spatial grounding</li>
+							<li>Verification of pre/post conditions</li>
+							<li>Monitoring and failure handover</li>
+						</ul>
+					</article>
+					<article class="feature-card">
+						<div class="feature-icon">◇</div>
+						<h4>Unified Skill Library</h4>
+						<p>Separates what a capability does from which model implements it, enabling heterogeneous backends to participate in one protocol.</p>
+						<ul>
+							<li>Operational: produce actions</li>
+							<li>Imagination: predict outcomes</li>
+							<li>Evaluation: assess progress</li>
+						</ul>
+					</article>
+				</div>
+
+				<figure class="paper-figure compact-figure">
+					<img src="images/paper/sub-agent.png" alt="Diagram of Main Agent orchestration, Sub-Agent evidence processing, and structured feedback." />
+					<figcaption>Main Agent orchestration and feedback flow. The Main Agent selects task-level decisions from an active context containing the instruction, plan status, recovery state, relevant memory, recent evidence, and compact Skill signatures. It delegates evidence processing to Sub Agents, invokes Skills, and updates or revises the plan. Structured evidence and verification outcomes return to the active context, advancing the task or triggering localized recovery.</figcaption>
+				</figure>
+
+				<h4 class="subsection-title">Standardized interfaces and lazy loading</h4>
+				<p>
+					Every callable interface follows the schema
+					<strong>K = &lang;I<sub>meta</sub>, &Theta;<sub>param</sub>, &Phi;<sub>pre</sub>, &Psi;<sub>post</sub>&rang;</strong>.
+					The Main Agent initially sees only a compact capability signature. Full parameters, preconditions, and
+					postconditions are retrieved only when the interface is selected, limiting context growth.
+				</p>
+				<figure class="paper-figure compact-figure api-figure">
+					<img src="images/paper/context.png" alt="Tool API hierarchy separating perception, action, and system interfaces." />
+					<figcaption>Tool API hierarchy and standardized interfaces. EMERGE-Policy organizes callable interfaces into three groups: Perception APIs provide spatial and semantic evidence, Action APIs dispatch motion primitives or VLA policies, and System APIs support workspace access and hardware operations. Each interface follows a common schema, &lang;I<sub>meta</sub>, &Theta;<sub>param</sub>, &Phi;<sub>pre</sub>, &Psi;<sub>post</sub>&rang;, allowing the Main Agent to retain compact metadata and retrieve full parameters, preconditions, and postconditions only when the interface is invoked.</figcaption>
+				</figure>
+			</section>
+
+			<section id="results" class="paper-section">
+				<h3>Results</h3>
+				<p>
+					We evaluate the complete orchestration system on LIBERO, LIBERO-Plus, LIBERO-Pro, and RoboDojo,
+					using fixed action primitives and different VLA/WAM execution backends. The headline numbers below
+					are system-level results: they reflect the complete interaction of planning, perception, skill
+					invocation, verification, and recovery.
+				</p>
+				<div class="metric-grid">
+					<div class="metric"><strong>99.2%</strong><span>Standard LIBERO<br />with world model</span></div>
+					<div class="metric"><strong>93.9%</strong><span>LIBERO-Plus<br />robustness</span></div>
+					<div class="metric"><strong>95.7%</strong><span>LIBERO-Pro<br />implicit spatial</span></div>
+					<div class="metric"><strong>25.00</strong><span>RoboDojo<br />memory score</span></div>
+					<div class="metric"><strong>+2.0%</strong><span>Gain over π<sub>0.5</sub><br />on LIBERO</span></div>
+				</div>
+
+				<h4 class="subsection-title">Selected benchmark results</h4>
+				<figure class="paper-figure results-overview-figure">
+					<img src="images/paper/selected-results-3x4.png?v=2" alt="Selected EMERGE-Policy results across LIBERO-Plus robustness, real-robot planning efficiency, and RoboDojo capabilities." />
+					<figcaption>Selected results across LIBERO-Plus robustness, real-robot planning efficiency, and RoboDojo capability scores.</figcaption>
+				</figure>
+
+				<h4 class="subsection-title">Standard LIBERO</h4>
+				<div class="table-wrap">
+					<table class="results-table">
+						<thead>
+							<tr><th>Method</th><th>Goal</th><th>Spatial</th><th>Object</th><th>Long</th><th>Average</th></tr>
+						</thead>
+						<tbody>
+							<tr><td>π<sub>0.5</sub></td><td>98.0</td><td>98.8</td><td>98.2</td><td>92.4</td><td>96.8</td></tr>
+							<tr><td>Cosmos Policy</td><td>98.2</td><td>98.1</td><td>100.0</td><td>97.6</td><td>98.5</td></tr>
+							<tr class="highlight-row"><td>EMERGE-Policy (w/o WM)</td><td>98.2</td><td>99.2</td><td>100.0</td><td>97.8</td><td>98.8</td></tr>
+							<tr class="highlight-row"><td>EMERGE-Policy (w/ WM)</td><td>99.2</td><td>99.0</td><td>100.0</td><td>98.6</td><td class="best">99.2</td></tr>
+						</tbody>
+					</table>
+				</div>
+				<p class="media-caption">Success rates (%) across LIBERO-Goal, Spatial, Object, and Long. WM denotes the world-model pathway.</p>
+
+				<h4 class="subsection-title">LIBERO-Plus</h4>
+				<div class="table-wrap">
+					<table class="results-table">
+						<thead>
+							<tr><th>Method</th><th>State</th><th>Language</th><th>Layout</th><th>Background</th><th>Sensor</th><th>Camera</th><th>Light</th><th>Average</th></tr>
+						</thead>
+						<tbody>
+							<tr><td>π<sub>0</sub></td><td>61.0</td><td>63.5</td><td>76.4</td><td>79.0</td><td>80.1</td><td>61.0</td><td>85.0</td><td>53.6</td></tr>
+							<tr><td>π<sub>0.5</sub></td><td>75.4</td><td>85.6</td><td>85.7</td><td>94.6</td><td>89.7</td><td>75.4</td><td>96.9</td><td>85.7</td></tr>
+							<tr><td>UniVLA</td><td>46.2</td><td>77.6</td><td>31.9</td><td>81.0</td><td>21.2</td><td>1.8</td><td>69.0</td><td>42.9</td></tr>
+							<tr><td>OpenVLA</td><td>3.5</td><td>23.0</td><td>28.5</td><td>34.8</td><td>15.2</td><td>0.8</td><td>8.1</td><td>15.6</td></tr>
+							<tr><td>WorldVLA</td><td>27.9</td><td>41.6</td><td>38.0</td><td>17.1</td><td>10.9</td><td>0.1</td><td>43.7</td><td>25.0</td></tr>
+							<tr><td>RIPT-VLA</td><td>31.2</td><td>77.6</td><td>74.2</td><td>91.6</td><td>73.5</td><td>55.2</td><td>88.4</td><td>68.4</td></tr>
+							<tr><td>DreamVLA</td><td>17.6</td><td>67.0</td><td>43.5</td><td>71.5</td><td>53.6</td><td>26.2</td><td>77.5</td><td>48.9</td></tr>
+							<tr><td>ABot-M0</td><td>67.9</td><td>86.4</td><td>82.6</td><td>91.6</td><td>86.4</td><td>60.4</td><td>96.2</td><td>80.5</td></tr>
+							<tr><td>Being-H0.7</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>82.1</td></tr>
+							<tr><td>OpenVLA-OFT</td><td>21.7</td><td>81.0</td><td>68.7</td><td>91.0</td><td>78.6</td><td>55.6</td><td>92.7</td><td>67.9</td></tr>
+							<tr><td>X-VLA</td><td>89.7</td><td>75.7</td><td>71.8</td><td>96.0</td><td>62.7</td><td>23.4</td><td>88.2</td><td>71.4</td></tr>
+							<tr><td>Cosmos-Policy</td><td>63.3</td><td>81.7</td><td>82.2</td><td>88.9</td><td>92.7</td><td>75.8</td><td>96.5</td><td>82.2</td></tr>
+							<tr><td>Fast-WAM</td><td>44.5</td><td>68.9</td><td>60.7</td><td>53.7</td><td>37.7</td><td>16.4</td><td>78.2</td><td>51.5</td></tr>
+							<tr><td>LingBot-VA</td><td>83.0</td><td>86.4</td><td>76.2</td><td>53.1</td><td>64.4</td><td>40.9</td><td>82.3</td><td>69.5</td></tr>
+							<tr><td>RoboHarness</td><td>90.4</td><td>97.0</td><td>86.8</td><td>97.1</td><td>90.3</td><td>87.6</td><td>97.4</td><td>93.2</td></tr>
+							<tr class="table-group"><th colspan="9">EMERGE-Policy</th></tr>
+							<tr class="highlight-row"><td>EMERGE-Policy (w/o WM)</td><td>87.6 <span class="delta positive">(+12.2)</span></td><td>87.5 <span class="delta positive">(+1.9)</span></td><td>91.6 <span class="delta positive">(+5.9)</span></td><td>89.7 <span class="delta negative">(-4.9)</span></td><td>84.2 <span class="delta negative">(-5.5)</span></td><td>84.9 <span class="delta positive">(+9.5)</span></td><td>92.4 <span class="delta negative">(-4.5)</span></td><td>88.3 <span class="delta positive">(+2.6)</span></td></tr>
+							<tr class="highlight-row"><td>EMERGE-Policy (w/ WM)</td><td>95.0 <span class="delta positive">(+31.7)</span></td><td>98.0 <span class="delta positive">(+16.3)</span></td><td>89.0 <span class="delta positive">(+6.8)</span></td><td>97.0 <span class="delta positive">(+8.1)</span></td><td>94.0 <span class="delta positive">(+1.3)</span></td><td>84.0 <span class="delta positive">(+8.2)</span></td><td>100.0 <span class="delta positive">(+3.5)</span></td><td class="best">93.9 <span class="delta positive">(+11.7)</span></td></tr>
+						</tbody>
+					</table>
+				</div>
+				<p class="media-caption">LIBERO-Plus robustness under seven perturbation types. Success rates (%) are reported for each perturbation, with the mean in Average. Colored values show the absolute change from the corresponding execution backend.</p>
+
+			</section>
+
+			<section id="deployment" class="paper-section">
+				<h3>Real-robot deployment</h3>
+				<p>
+					We study a long-horizon “Multi-layered Cup Stacking” task in which the robot identifies and picks up
+					six cups, then constructs a three-tier pyramid with three, two, and one cups. The task tests semantic
+					grounding, repeated grasp-and-place actions, concurrent agent coordination, memory of progress, and recovery.
+					Across 100 real-robot experiments, the closed-loop system maintained high completion rates under several
+					interference settings.
+				</p>
+				<figure class="paper-figure">
+					<img src="images/paper/robot-workflow.png" alt="Real-robot cup-stacking workflow showing observations, subgoals, perception, operational skills, and verification." />
+					<figcaption>EMERGE-Policy workflow</figcaption>
+				</figure>
+				<div class="robot-results">
+					<figure class="paper-figure">
+						<img src="images/paper/robot-standard.png" alt="Bar chart of standard real-robot cup-stacking success rates." />
+						<figcaption>Standard results</figcaption>
+					</figure>
+					<figure class="paper-figure">
+						<img src="images/paper/robot-perturbations.png" alt="Bar chart of real-robot cup-stacking robustness under interruptions and perturbations." />
+						<figcaption>Disturbance robustness</figcaption>
+					</figure>
+				</div>
+				<div class="disturbance-list">
+					<span><strong>86%</strong> interrupted execution</span>
+					<span><strong>92%</strong> cup-size variation</span>
+					<span><strong>85%</strong> camera viewpoint change</span>
+					<span><strong>94%</strong> lighting / color change</span>
+				</div>
+			</section>
+
+			<section id="analysis" class="paper-section">
+				<h3>Analysis</h3>
+				<h4 class="subsection-title">Three-tier memory and recovery</h4>
+				<p>
+					EMERGE-Policy externalizes long-horizon state instead of relying on an unbounded neural memory.
+					<strong>PLAN.md</strong> stores the subgoal decomposition and progress, <strong>ENVIRONMENT.md</strong>
+					records the latest physical state, and structured Sub-Agent evidence provides concise short-term facts.
+					An asynchronous visual monitor compares outcomes with the active criterion and feeds corrections back to
+					the Main Agent. When a local failure is detected, a recovery objective is pushed onto the Branch Stack
+					before global replanning is considered.
+				</p>
+				<figure class="paper-figure">
+					<img src="images/paper/memory.png" alt="Three-tier memory architecture with persistent task files, Sub-Agent evidence, Main Agent context, and visual verification." />
+					<figcaption>Three-tier memory and context management. PLAN.md and ENVIRONMENT.md maintain episode task state and current environment feedback. Specialized Sub Agents convert dense observations into structured evidence for the Main Agent, which consolidates relevant facts and updates execution using asynchronous visual verification.</figcaption>
+				</figure>
+
+				<h4 class="subsection-title">Imagination and Evaluation Skills</h4>
+				<p>
+					The Imagination Skill generates candidate action chunks and predicts their future observations. The
+					Evaluation Skill scores those predictions against the active completion criterion, and the Main Agent
+					greedily dispatches the highest-scoring candidate. In the reported implementation, the system evaluates
+					<strong>M = 5</strong> candidates with horizon <strong>H = 16</strong>; this adds approximately 1.2 seconds
+					per selection step while reducing risky physical trial-and-error.
+				</p>
+				<figure class="paper-figure">
+					<img src="images/paper/imagination.png" alt="Comparison of action execution without imagination versus candidate future prediction, evaluation, and selection." />
+					<figcaption>Action selection with and without Imagination and Evaluation Skills. In the complete pipeline, the Imagination Skill predicts the outcomes of candidate action chunks, and the Evaluation Skill scores these predictions to select an action chunk for execution. The comparison pipeline directly executes the generated action without outcome prediction or score-based selection.</figcaption>
+				</figure>
+
+				<h4 class="subsection-title">Task-specific priors improve efficiency</h4>
+				<p>
+					Planning priors expose the coupling between high-level subgoals and the native capabilities of the
+					execution skills. In the cup-stacking study, this removes redundant <code>move_to_pose</code> cycles,
+					reducing planning steps per subgoal by <strong>24.7%</strong> and wall-clock time per episode by
+					<strong>16.3%</strong>, while maintaining comparable success rates.
+				</p>
+				<figure class="paper-figure">
+					<img src="images/paper/trajectory.png" alt="Side-by-side trajectories comparing task execution without and with task-specific prior knowledge." />
+					<figcaption>Effect of task-specific prior knowledge on execution trajectories. Without the prior, the Main Agent inserts two additional move_to_pose commands for re-localization and pre-position verification, producing the upper zigzag trajectory. With the prior, it removes these commands and follows the lower direct trajectory, reducing planning steps by 24.7% and wall-clock time by 16.3% per episode while maintaining comparable success rates.</figcaption>
+				</figure>
+			</section>
+
+			<section id="conclusion" class="paper-section conclusion">
+				<h3>Conclusion</h3>
+				<p>
+					EMERGE-Policy is not another low-level control policy. It provides the structure through which
+					perception, prediction, execution, verification, recovery, and memory become coherent system-level
+					behavior. Its Main Agent maintains compact task state, Sub Agents process dense evidence in isolated
+					contexts, and Operational, Imagination, and Evaluation Skills give heterogeneous models a shared role-based
+					interface.
+				</p>
+				<p>
+					The reported gains are system-level results. Future work will make the harness evaluation protocol more
+					reproducible, quantify accuracy–latency–token trade-offs, and study how the same orchestration graph
+					transfers across planners, policies, tasks, and embodiments while separating safe within-episode
+					adaptation from persistent cross-episode learning.
+				</p>
+			</section>
+
+			<section class="paper-section">
+				<h3>BibTeX</h3>
+				<pre><code>@article{fang2026emergepolicy,
+  title   = {EMERGE-Policy: A Robot Mind Emerges Beyond a Single Policy},
+  author  = {Fang, Zhirui and Yu, Qingchi and Chen, Ziyang and Li, Longfei and Ma, Haoran and Zhou, Keru and Xu, Xinrun and Va, Samith and Hu, Yuxuan and Song, Peixuan and Du, Qiang and Qian, Bin and Deng, Yongkang and Li, Xin and Wang, Yezhen and Li, Zhe and Luo, Hao and Li, Shuyan and Wang, Ziwei and Deng, Weijian and Li, Xiu},
+  journal = {arXiv preprint arXiv:2608.29896},
+  year    = {2026}
+}</code></pre>
+			</section>
+
+		</main>
+
+		<script src="assets/js/jquery.min.js"></script>
+		<script src="assets/js/jquery.poptrox.min.js"></script>
+		<script src="assets/js/skel.min.js"></script>
+		<script src="assets/js/util.js"></script>
+		<script src="assets/js/main.js"></script>
+		<script src="assets/js/paper-nav.js"></script>
+	</body>
+</html>
