@@ -902,6 +902,15 @@ body::after {
 	position: relative;
 	min-width: 0;
 }
+.tui-hero {
+	grid-template-columns: minmax(0, 1fr);
+}
+.tui-hero .hero-clip video {
+	aspect-ratio: 2128 / 1276;
+	object-fit: contain;
+	object-position: center top;
+	background: #1a1d24;
+}
 .hero-clip video {
 	display: block;
 	width: 100%;
