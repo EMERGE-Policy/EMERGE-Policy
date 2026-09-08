@@ -1,0 +1,4 @@
+interface:
+  display_name: "Progress Reporting"
+  short_description: "Report meaningful task milestones without exposing reasoning"
+  default_prompt: "Use $progress-reporting to keep the user informed during a long-running task."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Object Localization"
+  short_description: "Verify visual candidates, then locate the selected target"
+  default_prompt: "Given an object and any identity-defining spatial relation, inspect all camera images, preserve the relation and its visible reference object in relation-aware SAM3 prompts, review every instance overlay across views, and locate only the candidate confirmed by both appearance and relation."

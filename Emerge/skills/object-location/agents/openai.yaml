@@ -1,0 +1,4 @@
+interface:
+  display_name: "Object Location Delegation"
+  short_description: "Delegate precise visual object localization"
+  default_prompt: "Use $object-location to locate the task objects before planning manipulation."

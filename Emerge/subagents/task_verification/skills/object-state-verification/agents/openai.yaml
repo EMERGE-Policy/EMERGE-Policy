@@ -1,0 +1,4 @@
+interface:
+  display_name: "Object State Verification"
+  short_description: "Verify visible embodied task outcomes"
+  default_prompt: "Use $object-state-verification to verify whether the requested object state is visibly achieved."

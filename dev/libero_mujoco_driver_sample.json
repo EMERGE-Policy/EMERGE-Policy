@@ -1,0 +1,179 @@
+{
+  "workspace": "~/.Emerge/workspace",
+  "libero": {
+    "bddl_file_name": "/data/yuqingchi/Code/Emerge-Policy/third_party/openpi/third_party/libero/libero/libero/bddl_files/libero_object/pick_up_the_cream_cheese_and_place_it_in_the_basket.bddl",
+    "libero_source_path": "third_party/openpi/third_party/libero",
+    "mujoco_gl": "egl",
+    "disable_numba_jit": true,
+    "robots": ["Panda"],
+    "control_freq": 20,
+    "horizon": 20000,
+    "gripper_max_opening_m": 0.08,
+    "env_kwargs": {}
+  },
+  "cameras": {
+    "agentview": {
+      "mode": "existing",
+      "width": 256,
+      "height": 256,
+      "depth": false,
+      "flip_vertical": false,
+      "observation": {
+        "enabled": false,
+        "directory": "artifacts/cameras/agentview"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/agentview.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "robot0_eye_in_hand": {
+      "mode": "existing",
+      "width": 256,
+      "height": 256,
+      "depth": false,
+      "flip_vertical": false,
+      "observation": {
+        "enabled": false,
+        "directory": "artifacts/cameras/wrist"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/wrist.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "frontview": {
+      "mode": "existing",
+      "width": 640,
+      "height": 480,
+      "depth": false,
+      "flip_vertical": true,
+      "observation": {
+        "enabled": false,
+        "directory": "artifacts/cameras/frontview"
+      },
+      "recording": {
+        "enabled": true,
+        "path": "artifacts/cameras/frontview.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "perception_oblique_1": {
+      "mode": "auto",
+      "fovy": 62.0,
+      "width": 518,
+      "height": 518,
+      "depth": false,
+      "flip_vertical": true,
+      "observation": {
+        "enabled": true,
+        "reference": true,
+        "directory": "artifacts/cameras/perception_oblique_1"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/perception_oblique_1.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "perception_oblique_2": {
+      "mode": "auto",
+      "fovy": 62.0,
+      "width": 518,
+      "height": 518,
+      "depth": false,
+      "flip_vertical": true,
+      "observation": {
+        "enabled": true,
+        "directory": "artifacts/cameras/perception_oblique_2"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/perception_oblique_2.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "perception_oblique_3": {
+      "mode": "auto",
+      "fovy": 62.0,
+      "width": 518,
+      "height": 518,
+      "depth": false,
+      "flip_vertical": true,
+      "observation": {
+        "enabled": true,
+        "directory": "artifacts/cameras/perception_oblique_3"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/perception_oblique_3.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "perception_side_1": {
+      "mode": "auto",
+      "fovy": 65.0,
+      "width": 518,
+      "height": 518,
+      "depth": false,
+      "flip_vertical": true,
+      "observation": {
+        "enabled": true,
+        "directory": "artifacts/cameras/perception_side_1"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/perception_side_1.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    },
+    "perception_side_2": {
+      "mode": "auto",
+      "fovy": 65.0,
+      "width": 518,
+      "height": 518,
+      "depth": false,
+      "flip_vertical": true,
+      "observation": {
+        "enabled": true,
+        "directory": "artifacts/cameras/perception_side_2"
+      },
+      "recording": {
+        "enabled": false,
+        "path": "artifacts/cameras/perception_side_2.mp4",
+        "fps": 20.0,
+        "codec": "mp4v"
+      }
+    }
+  },
+  "motion": {
+    "position_scale": 0.05,
+    "rotation_scale": 0.5,
+    "position_gain": 1.0,
+    "rotation_gain": 1.0,
+    "position_tolerance_m": 0.005,
+    "rotation_tolerance_rad": 0.05,
+    "max_steps": 160,
+    "gripper_max_opening_m": 0.08,
+    "move_linear_steps": 80,
+    "gripper_steps": 30,
+    "follow_arc_steps": 100
+  },
+  "vla": {
+    "server_url": "ws://localhost:8000",
+    "base_image_key": "agentview_image",
+    "wrist_image_key": "robot0_eye_in_hand_image",
+    "resize_size": 224,
+    "replan_steps": 10,
+    "timeout": 120.0
+  }
+}

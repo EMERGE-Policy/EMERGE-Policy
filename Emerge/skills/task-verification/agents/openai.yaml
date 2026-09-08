@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task Verification Delegation"
+  short_description: "Delegate visual task outcome checks"
+  default_prompt: "Use $task-verification to confirm whether the latest embodied action achieved its visible goal."

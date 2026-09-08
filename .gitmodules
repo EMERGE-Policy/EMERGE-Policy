@@ -1,0 +1,26 @@
+[submodule "third_party/lerobot"]
+	path = third_party/lerobot
+	url = https://github.com/huggingface/lerobot.git
+
+[submodule "third_party/sam3"]
+	path = third_party/sam3
+	url = https://github.com/facebookresearch/sam3.git
+
+[submodule "third_party/vggt"]
+	path = third_party/vggt
+	url = https://github.com/facebookresearch/vggt.git
+[submodule "third_party/openpi"]
+	path = third_party/openpi
+	url = https://github.com/Physical-Intelligence/openpi.git
+[submodule "third_party/libero_plus"]
+	path = third_party/libero_plus
+	url = https://github.com/sylvestf/LIBERO-plus.git
+[submodule "third_party/imagemagick_env"]
+	path = third_party/imagemagick_env
+	url = https://github.com/EMERGE-Policy/imagemagick_env.git
+[submodule "third_party/libero_pro"]
+	path = third_party/libero_pro
+	url = https://github.com/Zxy-MLlab/LIBERO-PRO.git
+[submodule "third_party/libero_pro_data"]
+	path = third_party/libero_pro_data
+	url = https://huggingface.co/datasets/zhouxueyang/LIBERO-Pro
