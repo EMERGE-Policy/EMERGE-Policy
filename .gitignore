@@ -26,3 +26,4 @@ test
 checkpoints
 .condaartifacts/
 artifacts/
+.DS_Store
