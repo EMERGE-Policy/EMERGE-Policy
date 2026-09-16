@@ -995,6 +995,16 @@ def _build_parser() -> argparse.ArgumentParser:
     for action in parser._actions:
         if action.dest in {"suite", "task_ids", "full"}:
             action.help = argparse.SUPPRESS
+        elif action.dest == "policy_backend":
+            action.choices = ("vla",)
+            action.default = "vla"
+            action.help = "LIBERO-Pro currently supports the VLA backend only."
+        elif action.dest in {
+            "wam_server_url",
+            "wam_conditioning_mode",
+            "skip_wam_server_check",
+        }:
+            action.help = argparse.SUPPRESS
     return parser
 
 
@@ -1168,10 +1178,11 @@ def main() -> int:
 
     if (
         not args.skip_policy_server_check
-        and not base._server_is_ready(args.policy_server_url)
+        and not base._server_is_ready(args.vla_server_url or args.policy_server_url)
     ):
+        server_url = args.vla_server_url or args.policy_server_url
         parser.error(
-            f"policy server is not reachable at {args.policy_server_url}; "
+            f"policy server is not reachable at {server_url}; "
             "start external_model_server/openpi_batch_server.py first or pass "
             "--skip-policy-server-check"
         )

@@ -22,9 +22,10 @@ For any multi-step embodied task, track progress in `PLAN.md`. It holds the whol
 1. **Plan** — on a new task, call `update_plan` with `update_kind="new_mission"`, the Mission, and a short Main Line of coarse milestones.
 2. **Recover context** — read `PLAN.md` first every turn and identify the current focus: the Branch Stack top when non-empty, otherwise the Pointer subgoal.
 3. **Bind the target** — keep the current Active Target and Intended Change in mind before choosing an action.
-4. **Act** — work only on the current focus. Choose rule actions or `vla_execute` at execution time according to the active embodiment guidance and the needs of the current phase.
-   When the plan has later subgoals, a `vla_execute` instruction must name only
-   the current focus and must not include those future subgoals.
+4. **Act** — work only on the current focus. Choose rule actions or the active model-policy action at execution time according to the embodiment guidance and the needs of the current phase.
+   A `vla_execute` instruction or WAM `phase_instruction` must name only the
+   current focus and must not include future subgoals. The evaluator supplies
+   WAM's complete task instruction separately.
 5. **Refresh robot state** — immediately after every `execute_robot_action` result, use `read_file` to read the current `ROBOT_STATE.md`. The copy in the original context is stale once the controller has executed an action. Perform this refresh before any PLAN update, visual verification, subagent call, or next robot action.
 6. **Check terminal state** — apply any environment-specific terminal-success rule first. A confirmed full-mission success ends the execution loop immediately; do not continue reasoning about subgoals or call another tool.
 7. **Reassess** — only when the full mission is not complete, compare the observed change with the current Done Criterion.
@@ -47,6 +48,9 @@ Examples of practical completion include a bowl remaining on a plate without bei
 - Once a subgoal reaches **`Retries >= 2`**, do not repeat the same approach. Change the action strategy, push a useful recovery subgoal, or rewrite the Main Line.
 - If the Branch Stack grows deeper than 2, simplify the recovery plan or report that intervention is needed rather than adding more nested recovery steps.
 - While the Branch Stack is non-empty, work only on its top. When its Done Criterion is met, pop it and leave the main-line Pointer where it was. Reassess the interrupted main-line subgoal before continuing.
+- Once a model-policy call starts a contact-sensitive subgoal, keep policy control until the Done Criterion is met, the target is confirmed lost, or a safety retreat is required. Do not insert a speculative target-directed rule move.
+- Use `move_to_pose` or `move_linear` only for a coarse pre-position, verified-held-object transit through clear space, or a safety clearance retreat. A recovery branch does not reset this move budget.
+- Before every rule move, record its purpose as pre-position, transit, or clearance and give it an observable Done Criterion.
 
 ## Plan Update Rules
 
@@ -62,9 +66,9 @@ Every `update_plan` call supplies the complete desired state:
 
 For "open the drawer and put the bowl inside", a coarse Main Line may be:
 
-1. **Open the drawer** — Active Target: drawer handle; Intended Change: the drawer becomes open enough to use. A pose-sensitive approach and opening phase may be handled by VLA.
-2. **Grasp the bowl** — Active Target: bowl; Intended Change: the bowl is carried with the gripper. Attach may perform the coarse approach and VLA the fine grasp.
+1. **Open the drawer** — Active Target: drawer handle; Intended Change: the drawer becomes open enough to use. A pose-sensitive approach and opening phase may be handled by the active model policy.
+2. **Grasp the bowl** — Active Target: bowl; Intended Change: the bowl is carried with the gripper. Attach may perform the coarse approach and the active model policy the fine grasp.
 3. **Move the bowl near the drawer** — Active Target: open drawer; Intended Change: the grasped bowl reaches a useful pre-placement region. Attach may perform the clear-space transport.
-4. **Place the bowl inside** — Active Target: bowl and drawer interior; Intended Change: the bowl remains inside the drawer. VLA may perform the fine placement; a functionally adequate placement is sufficient.
+4. **Place the bowl inside** — Active Target: bowl and drawer interior; Intended Change: the bowl remains inside the drawer. The active model policy may perform the fine placement; a functionally adequate placement is sufficient.
 
 The action examples are selected only when each phase becomes active; they are not a fixed action script embedded in the Main Line.

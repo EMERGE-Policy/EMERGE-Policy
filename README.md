@@ -4,11 +4,14 @@
 
 ### A Robot Mind Emerges Beyond a Single Policy
 
-Zhirui Fang<sup>*</sup>, Qingchi Yu<sup>*†</sup>, Ziyang Chen<sup>*</sup>, Longfei Li<sup>*†</sup>, Haoran Ma<sup>†</sup>, Keru Zhou, Xinrun Xu, Samith Va, Yuxuan Hu<sup>†</sup>, Peixuan Song, Qiang Du, Bin Qian, Yongkang Deng<sup>†</sup>, Xin Li<sup>†</sup>, Yezhen Wang, Zhe Li, Hao Luo, Shuyan Li, Ziwei Wang, Weijian Deng, Xiu Li<sup>✉</sup>
+Zhirui Fang<sup>&#42;</sup>, Qingchi Yu<sup>&#42;†</sup>, Ziyang Chen<sup>&#42;</sup>, Longfei Li<sup>&#42;†</sup><br>
+Haoran Ma<sup>†</sup>, Keru Zhou, Xinrun Xu, Samith Va, Yuxuan Hu<sup>†</sup>, Peixuan Song, Qiang Du<br>
+Bin Qian, Yongkang Deng<sup>†</sup>, Xin Li<sup>†</sup>, Yezhen Wang, Zhe Li, Hao Luo<br>
+Shuyan Li, Ziwei Wang, Weijian Deng, Xiu Li<sup>✉</sup>
 
 Tsinghua University · Nanjing University of Science and Technology · Xi'an Jiaotong University · Xidian University · Harbin Institute of Technology · Peking University · Nanyang Technological University
 
-<sup>*</sup> Equal contribution &nbsp;&nbsp; <sup>†</sup> Work done during internship at Tsinghua University &nbsp;&nbsp; <sup>✉</sup> Corresponding author
+<sup>&#42;</sup> Equal contribution &nbsp;&nbsp; <sup>†</sup> Work done during internship at Tsinghua University &nbsp;&nbsp; <sup>✉</sup> Corresponding author
 
 [![Project Page](https://img.shields.io/badge/Project-Page-6c5ce7?style=for-the-badge)](https://emerge-policy.github.io/EMERGE-Policy/)
 [![Paper](https://img.shields.io/badge/Paper-PDF-b31b1b?style=for-the-badge)](https://arxiv.org/pdf/2608.29896)
@@ -21,25 +24,70 @@ Tsinghua University · Nanjing University of Science and Technology · Xi'an Jia
   <img src="docs/images/paper/framework.png" alt="EMERGE-Policy framework" width="100%">
 </p>
 
-## Updates
+<table align="center" width="100%">
+  <tr>
+    <td align="center">
+      <br>
+      <h3> &nbsp; ❝ Thinking outside the brain means skillfully engaging entities external to our heads. ❞ &nbsp; </h3>
+      <p><strong>— Annie Murphy Paul, <em>The Extended Mind</em></strong></p>
+      <br>
+    </td>
+  </tr>
+</table>
 
-**[August 30, 2026]** The first version of EMERGE-Policy is now available! This
-initial release introduces an embodied control framework in which a primary agent
-coordinates planning while multiple sub-agents collaborate on perception and
-verification. It also establishes the first end-to-end closed-loop execution
-pipeline, marking the project's first step from a single policy toward
-multi-policy collaboration and continual evolution.
+##  What's New
+
+-  **[September 16, 2026]** We release the WAM version of EMERGE-Policy! This new
+  version integrates Cosmos Policy WAM alongside the original OpenPI VLA version,
+  with isolated model servers, multi-worker batched inference, and evaluation on
+  standard LIBERO and LIBERO-Plus. LIBERO-Pro evaluation currently remains on the
+  VLA version.
+
+-  **[September 7, 2026]** We release the new EMERGE-Policy CLI! The new `emerge`
+  command provides a simpler, unified entrypoint for launching and interacting
+  with the embodied agent.
+
+-  **[August 30, 2026]** The first version of EMERGE-Policy is now available! This
+  initial release introduces an embodied control framework in which a primary agent
+  coordinates planning while multiple sub-agents collaborate on perception and
+  verification. It also establishes the first end-to-end closed-loop execution
+  pipeline, marking the project's first step from a single policy toward
+  multi-policy collaboration and continual evolution.
+
+##  Beautiful CLI
+
+EMERGE-Policy includes a polished interactive CLI that brings conversations,
+live plan progress, robot state, observations, service readiness, and run
+artifacts into one terminal workspace. Launch it with the `emerge` command.
+
+<p align="center">
+  <a href="docs/videos/TUI/tui_demo.mp4">
+    <img src="docs/images/cli.png" alt="EMERGE-Policy interactive CLI" width="100%">
+  </a>
+</p>
+
+<p align="center"><em>Click the screenshot to watch the CLI demo.</em></p>
 
 ## Overview
 
-*🤖 EMERGE-Policy is an agentic embodied-control framework designed to move
-beyond the limitations of a single policy model. A primary agent coordinates task
-planning and recovery while delegating object localization, scene perception, and
-task verification to specialized sub-agents. The framework supports both OpenPI
-VLA and Cosmos Policy WAM backends. All actions are safely executed through the
-Controller, while live visual observations and simulator success signals close
-the loop, allowing the robot to perceive, decide, act, and correct itself through
-continuous interaction.*
+Embodied-intelligence research has traditionally pursued a single end-to-end
+model. Long-horizon tasks, however, require frequent low-level perception,
+context-intensive high-level planning, and fine-grained action generation. These
+competing workloads are difficult to reconcile within one model and can lead to
+confused reasoning, accumulated errors, and eventual task failure.
+
+**EMERGE-Policy introduces a new embodied-intelligence system paradigm.**
+Intelligence is not confined to any individual model. Instead, a graph-structured
+agent orchestrates tasks asynchronously and concurrently, invoking specialized
+models as tools for perception, planning, action, and verification. System-level
+intelligence thereby **emerges** through the coordinated interaction of multiple
+components.
+
+This architecture mirrors how humans exercise intelligence while interacting
+with the world: our eyes perceive the environment, our hands perform physical
+skills, and our brains plan and imagine. Different heterogeneous organs contribute
+different capabilities, while coherent intelligence arises from their
+collaboration.
 
 ## Installation
 
@@ -72,6 +120,9 @@ bash third_party/imagemagick_env/install.sh
 
 ### 3. Install the Standalone OpenPI Environment `pi05_server`
 
+pi05 Policy runs in its own Conda environment; do not install its server
+dependencies into `EmergePolicy`.
+
 ```bash
 conda create -n pi05_server python=3.12 -y
 conda activate pi05_server
@@ -81,6 +132,27 @@ cd third_party/openpi
 GIT_LFS_SKIP_SMUDGE=1 uv pip install \
   --python "$CONDA_PREFIX/bin/python" \
   -e .
+cd ../..
+```
+
+### 4. Install the Standalone Cosmos Policy Environment `cosmos-policy`
+
+Cosmos Policy runs in its own Conda environment; do not install its server
+dependencies into `EmergePolicy`.
+
+```bash
+conda create -n cosmos-policy python=3.10 -y
+conda activate cosmos-policy
+python -m pip install --upgrade pip uv
+
+cd third_party/cosmos-policy
+uv pip install \
+  --python "$CONDA_PREFIX/bin/python" \
+  -e ".[cu128]" \
+  --group libero \
+  "websockets>=16,<17" \
+  "msgpack>=1.1,<2"
+cd ../..
 ```
 
 ## Quick Start
@@ -88,6 +160,16 @@ GIT_LFS_SKIP_SMUDGE=1 uv pip install \
 The Python package is named `Emerge`, and the installed command-line entry point
 is `emerge`. The default configuration file is `~/.Emerge/config.json`, and the
 default workspace is `~/.Emerge/workspace`.
+
+Initialize the configuration and workspace before the first run:
+
+```bash
+emerge workspace init
+```
+
+This creates `~/.Emerge/config.json`, initializes `~/.Emerge/workspace`, and
+installs the bundled workspace templates. Add the required provider credentials
+to the generated configuration before launching the agent.
 
 Start the Controller in one terminal:
 
@@ -100,16 +182,38 @@ python -m robot.controller \
 Run the agent CLI in another terminal:
 
 ```bash
-python -m Emerge agent
+emerge
 ```
 
-Start the default OpenPI, VGGT, and SAM3 services:
+Choose one policy backend and start it together with the shared VGGT and SAM3
+perception services. The launcher, standard LIBERO evaluation, and LIBERO-Plus
+evaluation default to WAM. LIBERO-Pro supports VLA only.
+For the OpenPI VLA backend (use `--policy-backend vla` for evaluation):
 
 ```bash
-OPENPI_GPU=0,1,2 \
-VGGT_GPU=3 \
-SAM3_GPU=4 \
+OPENPI_GPU=0 \
+VGGT_GPU=1 \
+SAM3_GPU=2 \
 bash scripts/model_server/start_external_model_servers.sh --services openpi,vggt,sam3
+```
+
+For the Cosmos Policy WAM backend:
+
+```bash
+WAM_GPU=0 \
+VGGT_GPU=1 \
+SAM3_GPU=2 \
+bash scripts/model_server/start_external_model_servers.sh --services cosmos,vggt,sam3
+```
+
+The launcher uses the `cosmos-policy` environment and the default paths under
+`checkpoints/cosmos-policy/`; VGGT and SAM3 continue to use `EmergePolicy`.
+Check readiness from another terminal:
+
+```bash
+curl http://127.0.0.1:8003/healthz
+curl http://127.0.0.1:8001/healthz
+curl http://127.0.0.1:8002/healthz
 ```
 
 ## Model Checkpoints

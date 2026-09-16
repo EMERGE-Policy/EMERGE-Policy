@@ -1,6 +1,7 @@
 """File system tools: read, write, edit, list."""
 
 import difflib
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -94,6 +95,11 @@ class ReadFileTool(_FsTool):
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str:
         try:
             fp = self._resolve(path)
+            if inactive_skill := self._inactive_policy_skill(fp):
+                return (
+                    f"Error: {inactive_skill} skill is disabled by "
+                    "EMERGE_POLICY_BACKEND"
+                )
             if not fp.exists():
                 return f"Error: File not found: {path}"
             if not fp.is_file():
@@ -133,6 +139,15 @@ class ReadFileTool(_FsTool):
             return f"Error: {e}"
         except Exception as e:
             return f"Error reading file: {e}"
+
+    @staticmethod
+    def _inactive_policy_skill(path: Path) -> str | None:
+        backend = os.environ.get("EMERGE_POLICY_BACKEND", "").strip().lower()
+        if backend not in {"vla", "wam"} or path.name != "SKILL.md":
+            return None
+        parent_name = path.parent.name.lower()
+        inactive = "wam" if backend == "vla" else "vla"
+        return inactive if parent_name == inactive else None
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 """Context builder for assembling agent prompts."""
 
+import os
 import platform
 import time
 from datetime import datetime
@@ -43,13 +44,14 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        always_skills = self.skills.get_always_skills()
+        policy_backend = os.environ.get("EMERGE_POLICY_BACKEND", "").strip() or None
+        always_skills = self.skills.get_context_skills(policy_backend)
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.skills.build_skills_summary()
+        skills_summary = self.skills.build_skills_summary(policy_backend)
         if skills_summary:
             parts.append(f"""# Skills
 

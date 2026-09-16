@@ -1,7 +1,7 @@
 # Emerge-Policy LIBERO-Plus Evaluation Guide
 
 Run all commands from the repository root:
-`cd /data/yuqingchi/Code/Emerge-Policy`
+`cd /path/to/EMERGE-Policy`
 
 ## 0. Prerequisites
 
@@ -16,34 +16,43 @@ Prepare the following before running an evaluation:
   `MAGICK_HOME` and `LD_LIBRARY_PATH` automatically, but the directory must
   already exist.
 
-See [environment installation](../../README.md#2-安装主环境-emergepolicy) in the
+See [environment installation](../../README.md#installation) in the
 root README for the setup command. These dependencies are loaded even when
 tasks are enumerated with `--dry-run`.
 
-## 1. Start the three external model services (terminal 1)
+## 1. Start services (terminal 1)
 
-Use the following recommended configuration to start the OpenPI, VGGT, and
-SAM3 services required for LIBERO-Plus evaluation:
+### WAM (default)
+
+Use `cache-then-online` because the Language Instructions dimension can contain
+text that is not present in the official LIBERO T5 cache.
 
 ```bash
-OPENPI_MAX_BATCH_SIZE=4 \
-OPENPI_BATCH_WAIT_MS=10 \
-VGGT_MAX_BATCH_SIZE=4 \
-VGGT_BATCH_WAIT_MS=10 \
-SAM3_MAX_BATCH_SIZE=4 \
-SAM3_BATCH_WAIT_MS=10 \
+WAM_GPU=0 \
+VGGT_GPU=1 \
+SAM3_GPU=2 \
+WAM_EMBEDDING_MODE=cache-then-online \
+bash scripts/model_server/start_external_model_servers.sh --services cosmos,vggt,sam3
+```
+
+### VLA
+
+```bash
+OPENPI_GPU=0 \
+VGGT_GPU=1 \
+SAM3_GPU=2 \
 bash scripts/model_server/start_external_model_servers.sh --services openpi,vggt,sam3
 ```
 
-For service selection, GPU assignment, dynamic batching, ports, model paths,
-health checks, and the complete launcher parameter reference, see the
-[External model servers guide](../model_server/README.md).
+Batch size defaults to 1 for all services. For multiple workers, see
+[batch settings](../model_server/README.md#optional-batching-for-multiple-workers).
+Health checks are in the [service guide](../model_server/README.md#2-check-services).
 
 ## 2. Run the evaluation (terminal 2)
 
 ```bash
 conda activate EmergePolicy
-cd /data/yuqingchi/Code/Emerge-Policy
+cd /path/to/EMERGE-Policy
 ```
 
 ### Check task selection first
@@ -53,15 +62,17 @@ start simulation:
 
 ```bash
 python scripts/LiberoPlus_eval/eval_libero_plus_agent.py \
+  --policy-backend wam \
   --dimension sensor_noise \
   --count 4 \
   --dry-run
 ```
 
-### Evaluate one robustness dimension
+### WAM: evaluate one robustness dimension
 
 ```bash
 python scripts/LiberoPlus_eval/eval_libero_plus_agent.py \
+  --policy-backend wam \
   --dimension sensor_noise \
   --count 4 \
   --trials-per-task 1 \
@@ -69,6 +80,8 @@ python scripts/LiberoPlus_eval/eval_libero_plus_agent.py \
   --record-video \
   --output-dir artifacts/libero_plus_agent_eval/sensor_noise
 ```
+
+For VLA, use `--policy-backend vla` and a separate `--output-dir`.
 
 `--dimension` accepts an official name or one of the following snake-case
 names:
@@ -97,6 +110,7 @@ Repeat `--dimension` to select their union:
 
 ```bash
 python scripts/LiberoPlus_eval/eval_libero_plus_agent.py \
+  --policy-backend wam \
   --dimension camera_viewpoints \
   --dimension objects_layout \
   --count 4 \
@@ -122,6 +136,7 @@ seed, trial, and `--output-dir`. The evaluator validates task selection against
 
 ```bash
 python scripts/LiberoPlus_eval/eval_libero_plus_agent.py \
+  --policy-backend wam \
   --dimension light_conditions \
   --count 4 \
   --workers 8 --stream --record-video \
@@ -142,7 +157,11 @@ Streaming options are `--stream-host` (default: `127.0.0.1`), `--stream-port`
 | `--dimension` | Required robustness dimension; repeat it or use `all` |
 | `--episodes-per-dimension` / `--count` | Required number of episodes per dimension |
 | `--trials-per-task` | Must be `1` |
-| `--workers` | Concurrent episode count; start with 3–4 |
+| `--workers` | Concurrent episode count |
+| `--policy-backend` | `wam` (default) or `vla` |
+| `--vla-server-url` | OpenPI URL; default `ws://localhost:8000` |
+| `--wam-server-url` | Cosmos URL; default `ws://127.0.0.1:8003` |
+| `--wam-conditioning-mode` | `task` (default), `phase`, or `task_with_phase` |
 | `--seed` | Task-selection seed; default: `7` |
 | `--watchdog-ready-timeout-s` | MuJoCo startup timeout; Plus default: `600` seconds |
 | `--dry-run` | Enumerate tasks and create the plan without simulation |
@@ -153,6 +172,10 @@ Streaming options are `--stream-host` (default: `127.0.0.1`), `--stream-port`
 | `--continue-on-error` | Continue scheduling after an `infrastructure_error` |
 | `--driver-config` | Driver configuration; default: `dev/libero_plus_eval.json` |
 | `--output-dir` | Output directory; use a new directory for a new evaluation |
+
+WAM reuses `robot/profiles/libero_wam_mujoco.md`; VLA uses
+`robot/profiles/libero_mujoco.md`. Use `--profile-path` only to override the
+selected profile explicitly.
 
 ## Output files
 

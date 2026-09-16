@@ -8,10 +8,12 @@ from Emerge.utils.helpers import sync_workspace_templates
 
 app = typer.Typer(help="Configuration and provider management")
 console = Console()
+workspace_app = typer.Typer(help="Initialize and inspect the Emerge workspace")
+app.add_typer(workspace_app, name="workspace")
 
-@app.command()
-def onboard():
-    """Initialize Emerge configuration and workspace."""
+
+def _initialize_workspace() -> None:
+    """Initialize Emerge configuration, workspace, and bundled templates."""
     from Emerge.config.loader import get_config_path, load_config, save_config
     from Emerge.config.schema import Config
 
@@ -47,8 +49,14 @@ def onboard():
     console.print("     Get one at: https://openrouter.ai/keys")
     console.print("  2. Chat: [cyan]emerge[/cyan]")
 
-@app.command()
-def wsinit():
+
+@workspace_app.command("init")
+def workspace_init() -> None:
+    """Initialize the Emerge configuration and workspace."""
+    _initialize_workspace()
+
+
+def _show_workspace_status() -> None:
     """Show Emerge workspace and provider configuration."""
     from Emerge.config.loader import get_config_path, load_config
 
@@ -82,6 +90,12 @@ def wsinit():
             else:
                 has_key = bool(p.api_key)
                 console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+
+
+@workspace_app.command("status")
+def workspace_status() -> None:
+    """Show the current workspace and provider configuration."""
+    _show_workspace_status()
 
 
 # ============================================================================

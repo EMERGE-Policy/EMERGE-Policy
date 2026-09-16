@@ -7,14 +7,14 @@ import sys
 
 def app():
     argv = sys.argv[1:]
-    if argv and argv[0] in {"onboard", "wsinit", "provider"}:
+    if argv and argv[0] in {"workspace", "provider"}:
         from Emerge.cli.management import app as management
         management(args=argv)
         return
 
     parser = argparse.ArgumentParser(
         prog="emerge", description="Emerge robot agent workspace",
-        epilog="Commands: onboard, wsinit, provider",
+        epilog="Commands: workspace, provider",
     )
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--workspace", "-w")

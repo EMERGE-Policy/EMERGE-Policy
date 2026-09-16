@@ -1,14 +1,13 @@
 # Emerge-Policy LIBERO-Pro Evaluation Guide
 
-This evaluator is dimension-first, matching the LIBERO-Plus command style while
-keeping LIBERO-Pro code and data isolated from the standard LIBERO evaluator.
+Select tasks with `--dimension` and `--count` or `--only-task`.
 
 ## Prerequisites
 
 Run from the repository root:
 
 ```bash
-cd /data/yuqingchi/Code/Emerge-Policy
+cd /path/to/EMERGE-Policy
 conda activate EmergePolicy
 ```
 
@@ -22,6 +21,42 @@ third_party/libero_pro_data  # https://huggingface.co/datasets/zhouxueyang/LIBER
 Do not install LIBERO-Pro's pinned `requirements.txt` into the EmergePolicy
 environment. The evaluator uses the existing robosuite compatibility layer and
 loads LIBERO-Pro from `third_party/libero_pro`.
+
+## Start services (terminal 1)
+
+### VLA
+
+```bash
+OPENPI_GPU=0 \
+VGGT_GPU=1 \
+SAM3_GPU=2 \
+bash scripts/model_server/start_external_model_servers.sh --services openpi,vggt,sam3
+```
+
+Batch size defaults to 1. For multiple workers, see
+[batch settings](../model_server/README.md#optional-batching-for-multiple-workers).
+Health checks are in the [service guide](../model_server/README.md#2-check-services).
+
+### WAM
+
+LIBERO-Pro currently supports VLA only. The WAM backend is not available for
+this evaluation entrypoint.
+
+## Quick evaluation (terminal 2)
+
+```bash
+conda activate EmergePolicy
+python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
+  --dimension object \
+  --count 1 \
+  --trials-per-task 1 \
+  --workers 1 \
+  --record-video \
+  --output-dir artifacts/libero_pro_agent_eval/vla_smoke
+```
+
+Add `--max-steps 16` for a short execution check or `--dry-run` to list tasks.
 
 ## Dimensions
 
@@ -119,6 +154,7 @@ One selected task per dimension:
 
 ```bash
 python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
   --dimension available \
   --count 1 \
   --trials-per-task 1 \
@@ -129,6 +165,7 @@ Validate all 189 scored task variants (after one-time Environment preparation):
 
 ```bash
 python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
   --dimension available \
   --count 40 \
   --trials-per-task 1 \
@@ -147,6 +184,7 @@ tasks:
 
 ```bash
 python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
   --dimension position \
   --only-task libero_10_swap:2 \
   --only-task libero_10_swap:8 \
@@ -168,6 +206,7 @@ Select one task from every base suite in every dimension:
 
 ```bash
 python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
   --dimension available \
   --count 4 \
   --trials-per-task 1 \
@@ -175,8 +214,7 @@ python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
   --output-dir artifacts/libero_pro_agent_eval/smoke
 ```
 
-Before running, start the pi0.5 policy server used by the standard LIBERO and
-LIBERO-Plus evaluators.
+Start the VLA service stack before running evaluation commands.
 
 ## Larger evaluations
 
@@ -184,6 +222,7 @@ All 189 scored tasks, one trial each:
 
 ```bash
 python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
   --dimension available \
   --count 40 \
   --trials-per-task 1 \
@@ -195,6 +234,7 @@ The filtered full scale contains 9,450 episodes (189 tasks x 50 trials):
 
 ```bash
 python scripts/LiberoPro_eval/eval_libero_pro_agent.py \
+  --policy-backend vla \
   --dimension all \
   --count 40 \
   --trials-per-task 50 \

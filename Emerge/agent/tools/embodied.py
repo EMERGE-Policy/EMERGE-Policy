@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
 
 _BASE_RESULT_TIMEOUT_S = 60.0
 _VLA_PER_STEP_TIMEOUT_S = 15.0
+_WAM_INFERENCE_TIMEOUT_S = 180.0
+_WAM_PER_STEP_TIMEOUT_S = 2.0
 
 
 class EmbodiedActionTool(Tool):
@@ -42,17 +45,68 @@ class EmbodiedActionTool(Tool):
 
     @property
     def description(self) -> str:
+        backend = os.environ.get("EMERGE_POLICY_BACKEND", "").strip().lower()
+        if backend == "vla":
+            policy_guidance = (
+                "Use vla_execute for the current visually sensitive contact phase, "
+                "with a phase-local instruction that omits future subgoals. "
+            )
+        elif backend == "wam":
+            policy_guidance = (
+                "Use wam_execute for the current visually sensitive contact phase. "
+                "phase_instruction must describe exactly the next unfinished "
+                "visual-contact phase, not the complete mission or a later phase. "
+                "The evaluator preserves the full task separately and locks the "
+                "configured conditioning mode. "
+            )
+        else:
+            policy_guidance = (
+                "Use the active model-policy backend for the current visually "
+                "sensitive contact phase. VLA uses instruction; WAM keeps task and "
+                "phase instructions separate. "
+            )
         return (
             "Execute a physical action on the robot. "
             "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport. "
             "Choose concrete poses, line segments, arc geometry, and gripper openings from the latest ROBOT_STATE.md or a successful object_location result. "
-            "Use vla_execute for the current visually sensitive contact phase; in a multi-step plan its instruction must describe only the current subgoal, not the complete mission. "
+            f"{policy_guidance}"
             "Every tool call MUST include a non-empty `parameters` object. "
             "Do not call this tool with only `action_type` and `reasoning`."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
+        backend = os.environ.get("EMERGE_POLICY_BACKEND", "").strip().lower()
+        if backend == "vla":
+            policy_actions = (
+                "- 'vla_execute': Execute the current phase's natural-language "
+                "instruction using the VLA policy"
+            )
+            policy_examples = (
+                "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
+                "For vla_execute, provide one phase-local instruction and a positive "
+                "step budget."
+            )
+        elif backend == "wam":
+            policy_actions = (
+                "- 'wam_execute': Execute a bounded Cosmos Policy WAM action chunk "
+                "using the evaluator-locked conditioning"
+            )
+            policy_examples = (
+                "- wam_execute grasp: {phase_instruction: 'grasp and lift the red block', step: 48}\n"
+                "- wam_execute placement: {phase_instruction: 'place the held red block in the basket and release it', step: 60}\n"
+                "For wam_execute, provide exactly one current phase_instruction and a "
+                "positive step budget. The evaluator supplies task_instruction."
+            )
+        else:
+            policy_actions = (
+                "- 'vla_execute': Execute a phase-local instruction with VLA\n"
+                "- 'wam_execute': Execute a bounded Cosmos Policy WAM action chunk"
+            )
+            policy_examples = (
+                "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
+                "- wam_execute: {phase_instruction: 'grasp and lift the red block', step: 48}"
+            )
         return {
             "type": "object",
             "properties": {
@@ -64,7 +118,7 @@ class EmbodiedActionTool(Tool):
                         "- 'move_linear': Move end-effector linearly (straight line) to target or by delta\n"
                         "- 'set_gripper': Set gripper opening (open/close command or specific width in meters)\n"
                         "- 'follow_arc': Move end-effector along an arc (circular motion)\n"
-                        "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy"
+                        f"{policy_actions}"
                     ),
                 },
                 "parameters": {
@@ -78,14 +132,13 @@ class EmbodiedActionTool(Tool):
                         "- move_linear: {position_m: [x,y,z]} or {delta_m: [dx,dy,dz]}, optionally with orientation\n"
                         "- set_gripper: {opening_m: 0.08} or {command: 'open'} or {command: 'close'}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
-                        "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
+                        f"{policy_examples}\n"
                         "For move_to_pose, ALWAYS provide position_m and either orientation_euler or orientation_quat. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
                         "For follow_arc, ALWAYS provide center, axis, radius_m, and one of angle_deg or angle_rad. "
-                        "For vla_execute, ALWAYS provide a natural language instruction (or prompt) AND step "
-                        "(the number of action steps the VLA runs before returning control to you). "
-                        "The action completes when the step budget is used up or the goal is reached earlier, "
-                        "so you can interleave VLA with rule-based actions."
+                        "A model-policy action completes when its step budget is used or "
+                        "the goal is reached earlier. Re-read ROBOT_STATE.md before "
+                        "choosing the next action."
                     ),
                 },
                 "reasoning": {
@@ -119,6 +172,14 @@ class EmbodiedActionTool(Tool):
         if not embodied_file.exists():
             return f"Error: {embodied_file.name} not found for the target robot. Cannot dispatch action."
 
+        backend = os.environ.get("EMERGE_POLICY_BACKEND", "").strip().lower()
+        requested_backend = {
+            "vla_execute": "vla",
+            "wam_execute": "wam",
+        }.get(action_type)
+        if backend in {"vla", "wam"} and requested_backend not in {None, backend}:
+            return f"Error: {action_type} is disabled by EMERGE_POLICY_BACKEND={backend}"
+        parameters = self._effective_parameters(action_type, parameters)
         logger.info("Dispatching action: {} {}", action_type, parameters)
         accepted = self._accept_action(action_type, parameters, action_file)
         if isinstance(accepted, str):
@@ -135,6 +196,34 @@ class EmbodiedActionTool(Tool):
         )
 
     @staticmethod
+    def _effective_parameters(
+        action_type: str,
+        parameters: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Record evaluator-locked WAM conditioning in the action queue."""
+        effective = dict(parameters)
+        if action_type != "wam_execute":
+            return effective
+        mode = os.environ.get("EMERGE_WAM_CONDITIONING_MODE", "").strip()
+        task = os.environ.get("EMERGE_WAM_TASK_INSTRUCTION", "").strip()
+        if mode not in {"task", "phase", "task_with_phase"}:
+            return effective
+        effective["conditioning_mode"] = mode
+        if task:
+            effective["task_instruction"] = task
+        if mode == "task":
+            effective.pop("instruction", None)
+            effective.pop("prompt", None)
+            effective.pop("phase_instruction", None)
+            if task:
+                effective["conditioning_instruction"] = task
+        else:
+            phase = str(effective.get("phase_instruction", "")).strip()
+            if phase:
+                effective["conditioning_instruction"] = phase
+        return effective
+
+    @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:
         """Backstop wait budget, scaled by the action's step count."""
         if action_type == "vla_execute":
@@ -143,6 +232,17 @@ class EmbodiedActionTool(Tool):
             except (TypeError, ValueError):
                 step = 0
             return _BASE_RESULT_TIMEOUT_S + step * _VLA_PER_STEP_TIMEOUT_S
+        if action_type == "wam_execute":
+            try:
+                step = max(0, int(parameters.get("step", 0)))
+            except (TypeError, ValueError):
+                step = 0
+            query_count = max(1, (step + 15) // 16)
+            return (
+                _BASE_RESULT_TIMEOUT_S
+                + query_count * _WAM_INFERENCE_TIMEOUT_S
+                + step * _WAM_PER_STEP_TIMEOUT_S
+            )
         return _BASE_RESULT_TIMEOUT_S
 
     @staticmethod

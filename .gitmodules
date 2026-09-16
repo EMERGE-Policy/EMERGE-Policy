@@ -24,3 +24,6 @@
 [submodule "third_party/libero_pro_data"]
 	path = third_party/libero_pro_data
 	url = https://huggingface.co/datasets/zhouxueyang/LIBERO-Pro
+[submodule "third_party/cosmos-policy"]
+	path = third_party/cosmos-policy
+	url = https://github.com/NVlabs/cosmos-policy.git

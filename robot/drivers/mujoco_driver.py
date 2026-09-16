@@ -10,10 +10,11 @@ from robot.mujoco_simulation.mujoco_actions import MujocoActionController
 from robot.mujoco_simulation.mujoco_env import MujocoEnvManager
 from robot.mujoco_simulation.scene_io import SceneConfigParser
 from robot.vla.mujoco_policy_executor import VLAExecutor
+from robot.wam.mujoco_policy_executor import CosmosWAMExecutor
 
 
 class LiberoMujocoDriver(BaseDriver):
-    """Expose rule actions and pi0.5 actions through one LIBERO environment."""
+    """Expose rule, pi0.5 VLA, and Cosmos WAM actions in LIBERO."""
 
     def __init__(
         self,
@@ -23,6 +24,7 @@ class LiberoMujocoDriver(BaseDriver):
         cameras: dict[str, dict[str, Any]] | None = None,
         motion: dict[str, Any] | None = None,
         vla: dict[str, Any] | None = None,
+        wam: dict[str, Any] | None = None,
         evaluation: dict[str, Any] | None = None,
         profile_path: str | Path | None = None,
         **_kwargs: Any,
@@ -32,6 +34,18 @@ class LiberoMujocoDriver(BaseDriver):
                 "libero_mujoco is an EGL offscreen driver; gui must be false"
         )
         self._evaluation_config = dict(evaluation or {})
+        self._policy_backend = str(
+            self._evaluation_config.get("policy_backend", "both")
+        ).strip().lower()
+        if self._policy_backend not in {"vla", "wam", "both"}:
+            raise ValueError(
+                "evaluation.policy_backend must be one of: vla, wam, both"
+            )
+        enabled_policy_backends = (
+            {"vla", "wam"}
+            if self._policy_backend == "both"
+            else {self._policy_backend}
+        )
         self._workspace = Path(workspace or Path.cwd()).expanduser().resolve()
         if profile_path is None:
             self._profile_path = (
@@ -61,9 +75,23 @@ class LiberoMujocoDriver(BaseDriver):
             )
         self._scene_parser = SceneConfigParser()
         self._vla_config = dict(vla or {})
-        self._vla = VLAExecutor(self._environment, config=self._vla_config)
+        self._vla = (
+            VLAExecutor(self._environment, config=self._vla_config)
+            if "vla" in enabled_policy_backends
+            else None
+        )
+        self._wam_config = dict(wam or {})
+        self._wam = (
+            CosmosWAMExecutor(self._environment, config=self._wam_config)
+            if "wam" in enabled_policy_backends
+            else None
+        )
         self._actions = MujocoActionController(
-            self._environment, motion, vla_executor=self._vla
+            self._environment,
+            motion,
+            vla_executor=self._vla,
+            wam_executor=self._wam,
+            enabled_policy_backends=enabled_policy_backends,
         )
 
     def get_profile_path(self) -> Path:
@@ -94,4 +122,6 @@ class LiberoMujocoDriver(BaseDriver):
     def close(self) -> None:
         if self._vla is not None:
             self._vla.close()
+        if self._wam is not None:
+            self._wam.close()
         self._environment.close()

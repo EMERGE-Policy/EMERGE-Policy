@@ -23,9 +23,20 @@ class MujocoActionController:
         config: dict[str, Any] | None = None,
         *,
         vla_executor: Any | None = None,
+        wam_executor: Any | None = None,
+        enabled_policy_backends: set[str] | None = None,
     ) -> None:
         self._environment = environment
         self._vla = vla_executor
+        self._wam = wam_executor
+        self._enabled_policy_backends = set(
+            enabled_policy_backends
+            if enabled_policy_backends is not None
+            else {"vla", "wam"}
+        )
+        unknown_backends = self._enabled_policy_backends - {"vla", "wam"}
+        if unknown_backends:
+            raise ValueError(f"unsupported policy backends: {sorted(unknown_backends)}")
         self.config = dict(config or {})
         self.position_scale = float(self.config.get("position_scale", 0.05))
         self.rotation_scale = float(self.config.get("rotation_scale", 0.5))
@@ -54,12 +65,22 @@ class MujocoActionController:
         *,
         cancel_check: Callable[[], str | None] | None = None,
     ) -> str:
+        policy_backend = {
+            "vla_execute": "vla",
+            "wam_execute": "wam",
+        }.get(action_type)
+        if (
+            policy_backend is not None
+            and policy_backend not in self._enabled_policy_backends
+        ):
+            return f"Failed: {action_type} is disabled by evaluation.policy_backend"
         handlers = {
             "move_to_pose": self._move_to_pose,
             "move_linear": self._move_linear,
             "set_gripper": self._set_gripper,
             "follow_arc": self._follow_arc,
             "vla_execute": self._vla_execute,
+            "wam_execute": self._wam_execute,
         }
         handler = handlers.get(action_type)
         if handler is None:
@@ -103,11 +124,74 @@ class MujocoActionController:
         if result.reason == "interrupted":
             return f"Interrupted: {result.error_message or 'visual monitor requested a stop'}"
         if result.success:
-            return f"VLA execution finished: {result.reason}, steps={result.total_steps}."
+            status = (
+                "task success confirmed"
+                if result.task_success
+                else "task success not confirmed; re-read ROBOT_STATE.md"
+            )
+            return (
+                f"VLA execution finished: {result.reason}, steps={result.total_steps}; "
+                f"{status}."
+            )
         detail = f" ({result.error_message})" if result.error_message else ""
         return (
             f"Failed: VLA execution {result.reason} "
             f"after {result.total_steps} steps{detail}."
+        )
+
+    def _wam_execute(self, params: dict[str, Any]) -> str:
+        if self._wam is None:
+            return "Failed: LIBERO WAM executor is not initialized"
+        legacy_instruction = str(
+            params.get("instruction", params.get("prompt", ""))
+        ).strip()
+        task_instruction = str(params.get("task_instruction", "")).strip()
+        phase_instruction = str(params.get("phase_instruction", "")).strip()
+        if not legacy_instruction and not task_instruction and not phase_instruction:
+            return (
+                "Failed: wam_execute requires task_instruction, phase_instruction, "
+                "or instruction"
+            )
+        if "step" not in params:
+            return "Failed: wam_execute requires step"
+        try:
+            step = int(params["step"])
+        except (TypeError, ValueError):
+            return "Failed: wam_execute step must be a positive integer"
+        result = self._wam.execute(
+            legacy_instruction or None,
+            step=step,
+            task_instruction=task_instruction or None,
+            phase_instruction=phase_instruction or None,
+            conditioning_mode=params.get("conditioning_mode"),
+            cancel_check=self._cancel_check,
+        )
+        if result.last_gripper_command is not None:
+            self._gripper_command = float(result.last_gripper_command)
+        search_detail = ""
+        if result.search_decisions:
+            decision = result.search_decisions[-1]
+            search_detail = (
+                f", search=best_of_{decision['num_candidates']}"
+                f", selected={decision['selected_index']}"
+                f", score={decision['selected_score']:.4f}"
+            )
+        if result.reason == "interrupted":
+            return f"Interrupted: {result.error_message or 'WAM action cancelled'}"
+        if result.success:
+            status = (
+                "task success confirmed"
+                if result.task_success
+                else "task success not confirmed; re-read ROBOT_STATE.md"
+            )
+            return (
+                f"WAM action completed: {result.reason}, steps={result.total_steps}; "
+                f"{status}{search_detail}."
+            )
+        detail = f" ({result.error_message})" if result.error_message else ""
+        return (
+            f"Failed: WAM execution {result.reason} "
+            f"after {result.total_steps} steps{detail}{search_detail}."
         )
 
     def _move_to_pose(self, params: dict[str, Any]) -> str:

@@ -98,7 +98,7 @@ class SkillsLoader:
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
-    def build_skills_summary(self) -> str:
+    def build_skills_summary(self, policy_backend: str | None = None) -> str:
         """
         Build a summary of all skills (name, description, path, availability).
 
@@ -109,6 +109,14 @@ class SkillsLoader:
             XML-formatted skills summary.
         """
         all_skills = self.list_skills(filter_unavailable=False)
+        if policy_backend is not None:
+            active_policy_skills = set(self._policy_skill_names(policy_backend))
+            all_skills = [
+                skill
+                for skill in all_skills
+                if skill["name"] not in {"vla", "wam"}
+                or skill["name"] in active_policy_skills
+            ]
         if not all_skills:
             return ""
 
@@ -199,6 +207,27 @@ class SkillsLoader:
             if skill_meta.get("always") or meta.get("always"):
                 result.append(s["name"])
         return result
+
+    def get_context_skills(self, policy_backend: str | None = None) -> list[str]:
+        """Return always-on skills with optional policy-backend selection."""
+        result = self.get_always_skills()
+        if policy_backend is None:
+            return result
+
+        result = [name for name in result if name not in {"vla", "wam"}]
+        available = {
+            skill["name"] for skill in self.list_skills(filter_unavailable=True)
+        }
+        selected = self._policy_skill_names(policy_backend)
+        result.extend(name for name in selected if name in available)
+        return result
+
+    @staticmethod
+    def _policy_skill_names(policy_backend: str) -> tuple[str, ...]:
+        backend = str(policy_backend).strip().lower()
+        if backend not in {"vla", "wam", "both"}:
+            raise ValueError("policy_backend must be one of: vla, wam, both")
+        return ("vla", "wam") if backend == "both" else (backend,)
 
     def get_skill_metadata(self, name: str) -> dict | None:
         """

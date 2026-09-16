@@ -13,7 +13,7 @@ WAM_ENV="${WAM_ENV:-cosmos-policy}"
 WAM_PYTHON="${WAM_PYTHON:-}"
 PORT_CHECK_PYTHON="${PORT_CHECK_PYTHON:-}"
 
-SERVICES="${SERVICES:-openpi,vggt,sam3}"
+SERVICES="${SERVICES:-cosmos,vggt,sam3}"
 
 OPENPI_PORT="${OPENPI_PORT:-8000}"
 VGGT_PORT="${VGGT_PORT:-8001}"
@@ -27,12 +27,14 @@ WAM_GPU="${WAM_GPU:-0}"
 
 OPENPI_CONFIG="${OPENPI_CONFIG:-pi05_libero}"
 OPENPI_CHECKPOINT="${OPENPI_CHECKPOINT:-${REPO_ROOT}/checkpoints/pi05_libero}"
-OPENPI_MAX_BATCH_SIZE="${OPENPI_MAX_BATCH_SIZE:-4}"
+OPENPI_MAX_BATCH_SIZE="${OPENPI_MAX_BATCH_SIZE:-1}"
 OPENPI_BATCH_WAIT_MS="${OPENPI_BATCH_WAIT_MS:-10}"
-VGGT_MAX_BATCH_SIZE="${VGGT_MAX_BATCH_SIZE:-4}"
+VGGT_MAX_BATCH_SIZE="${VGGT_MAX_BATCH_SIZE:-1}"
 VGGT_BATCH_WAIT_MS="${VGGT_BATCH_WAIT_MS:-0}"
-SAM3_MAX_BATCH_SIZE="${SAM3_MAX_BATCH_SIZE:-4}"
+SAM3_MAX_BATCH_SIZE="${SAM3_MAX_BATCH_SIZE:-1}"
 SAM3_BATCH_WAIT_MS="${SAM3_BATCH_WAIT_MS:-0}"
+WAM_MAX_BATCH_SIZE="${WAM_MAX_BATCH_SIZE:-1}"
+WAM_BATCH_WAIT_MS="${WAM_BATCH_WAIT_MS:-10}"
 VGGT_CHECKPOINT="${VGGT_CHECKPOINT:-${REPO_ROOT}/checkpoints/vggt/model.pt}"
 SAM3_CHECKPOINT="${SAM3_CHECKPOINT:-${REPO_ROOT}/checkpoints/sam3/model.pt}"
 WAM_POLICY_CHECKPOINT="${WAM_POLICY_CHECKPOINT:-${REPO_ROOT}/checkpoints/cosmos-policy/Cosmos-Policy-LIBERO-Predict2-2B.pt}"
@@ -70,7 +72,7 @@ Command-line options:
 
 Service selection and runtime:
   SERVICES                      Services used without --services
-                                (default: openpi,vggt,sam3)
+                                (default: cosmos,vggt,sam3)
   CONDA_BIN                     Conda executable (default: conda)
   PORT_CHECK_PYTHON             Python executable used for port checks
                                 (default: auto-detect python3 or python)
@@ -84,7 +86,7 @@ OpenPI:
   OPENPI_CONFIG                 Training config name (default: pi05_libero)
   OPENPI_CHECKPOINT             Checkpoint directory
                                 (default: <repo>/checkpoints/pi05_libero)
-  OPENPI_MAX_BATCH_SIZE         Maximum requests per batch (default: 4)
+  OPENPI_MAX_BATCH_SIZE         Maximum requests per batch (default: 1)
   OPENPI_BATCH_WAIT_MS          Maximum batch collection time in ms
                                 (default: 10)
 
@@ -97,7 +99,7 @@ VGGT:
   VGGT_GPU                      CUDA_VISIBLE_DEVICES (default: 1)
   VGGT_CHECKPOINT               Model file
                                 (default: <repo>/checkpoints/vggt/model.pt)
-  VGGT_MAX_BATCH_SIZE           Maximum requests per batch (default: 4)
+  VGGT_MAX_BATCH_SIZE           Maximum requests per batch (default: 1)
   VGGT_BATCH_WAIT_MS            Maximum batch collection time in ms
                                 (default: 0)
 
@@ -106,11 +108,13 @@ SAM3:
   SAM3_GPU                      CUDA_VISIBLE_DEVICES (default: 2)
   SAM3_CHECKPOINT               Model file
                                 (default: <repo>/checkpoints/sam3/model.pt)
-  SAM3_MAX_BATCH_SIZE           Maximum requests per batch (default: 4)
+  SAM3_MAX_BATCH_SIZE           Maximum requests per batch (default: 1)
   SAM3_BATCH_WAIT_MS            Maximum batch collection time in ms
                                 (default: 0)
 
 Cosmos Policy WAM:
+  WAM_MAX_BATCH_SIZE            Maximum worker requests per batch (default: 1)
+  WAM_BATCH_WAIT_MS             Maximum batch collection time in ms (default: 10)
   WAM_ENV                       Conda environment (default: cosmos-policy)
   WAM_PYTHON                    Direct Python executable; bypasses WAM_ENV
                                 (default: empty)
@@ -459,7 +463,9 @@ fi
 
 if service_enabled cosmos; then
     wam_command=(
-        env "PYTHONPATH=${REPO_ROOT}:${WAM_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"
+        env
+        "PYTHONNOUSERSITE=1"
+        "PYTHONPATH=${REPO_ROOT}:${WAM_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"
         "${WAM_PYTHON:-python}" -m external_model_server.cosmos_policy_server
         --policy-checkpoint "${WAM_POLICY_CHECKPOINT}"
         --base-model-dir "${WAM_BASE_MODEL_DIR}"
@@ -472,6 +478,8 @@ if service_enabled cosmos; then
         --config-file "${WAM_CONFIG_FILE}"
         --host 127.0.0.1
         --port "${WAM_PORT}"
+        --max-batch-size "${WAM_MAX_BATCH_SIZE}"
+        --batch-wait-ms "${WAM_BATCH_WAIT_MS}"
     )
     if [[ -n "${T5_CACHE_DIR}" ]]; then
         wam_command+=(--t5-cache-dir "${T5_CACHE_DIR}")

@@ -1,3 +1,0 @@
-network: IdentityEncoder
-network_kwargs:
-    dummy: true

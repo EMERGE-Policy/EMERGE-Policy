@@ -1,368 +1,380 @@
-# Emerge 包说明
+# Emerge
 
-`Emerge` 是项目的主 Agent 包，负责组织 LLM 上下文、skills、tools、会话状态、具身动作，以及已经注册的专业子 Agent。机器人和仿真环境由仓库根目录下的 `robot/` 运行，二者通过 workspace 文件交互。
+`Emerge` is the agent orchestration and execution package behind EMERGE-Policy. It turns a user instruction into a stateful embodied-agent run by combining an LLM, workspace context, specialist sub-agents, robot tools, memory, and a versioned runtime protocol.
 
-## 1. 核心结构
+The package does not own the simulator or robot process. Those components live under `robot/` and exchange state and actions with Emerge through a shared workspace.
+
+## System overview
 
 ```text
-用户任务
-   ↓
-AgentLoop
-   ├── ContextBuilder：AGENTS.md、具身状态、memory、skills
-   ├── ToolRegistry：文件、Shell、计划、消息、具身动作、场景查询
-   ├── SessionManager：会话历史
-   └── delegate_subagent
-          ↓
-      SubagentRegistry
-          ├── ObjectLocationSubagent
-          ├── 私有 context
-          ├── object-localization skill
-          ├── observe_scene
-          ├── segment_candidates → VGGT + SAM3 + 完整视角 overlays
-          └── locate_candidates → 复用已确认候选的缓存 geometry/masks
-          └── TaskVerificationSubagent
-              ├── 私有 context
-              ├── object-state-verification skill
-              ├── observe_scene
-              └── submit_task_verification → 提交可见状态与证据
+Human TUI or machine client
+            |
+            v
+      AgentRuntime
+      - configuration loading
+      - exclusive workspace lease
+      - events and run artifacts
+      - cancellation and cleanup
+            |
+            v
+        AgentLoop
+      - provider and sessions
+      - context and memory
+      - tools and skills
+      - visual monitor
+            |
+            +-----------------------------+
+            |                             |
+            v                             v
+  Specialist sub-agents          Workspace action queue
+  - object_location              ACTION.md -> controller
+  - task_verification            controller -> ROBOT_STATE.md
+            |
+            v
+  Observation and perception services
+  - calibrated camera views
+  - VGGT reconstruction
+  - SAM3 segmentation
 ```
 
-主 Agent 不直接操作子 Agent 的内部工具。动作前通过 `object_location` 获取精确世界坐标；
-动作后通过 `task_verification` 验证目标物体状态是否真正达成。
+The TUI and headless CLI are clients of the same `AgentRuntime`. They therefore use the same configuration, workspace lock, agent loop, event model, cancellation rules, and cleanup behavior.
 
-## 2. 模块地图
+## Main capabilities
+
+- Stateful tool-using agent loop with context-window management and persistent sessions.
+- Workspace-based robot coordination through explicit state, plan, observation, and action files.
+- Geometry-driven motion primitives plus model-policy execution through either VLA or WAM.
+- Dedicated object-localization and task-verification sub-agents with isolated contexts and tools.
+- Continuous visual monitoring that can interrupt a running robot action when its visible subgoal is achieved.
+- Interactive full-screen terminal UI for human operation.
+- Versioned JSON request, event, and result contracts for evaluation and automation.
+- Provider routing for hosted APIs, OAuth providers, OpenAI-compatible endpoints, and local deployments.
+
+## Package map
 
 ```text
 Emerge/
-├── __main__.py                    # python -m Emerge
 ├── agent/
-│   ├── loop.py                    # 主 Agent 推理与工具循环
-│   ├── context.py                 # 主 Agent system prompt
-│   ├── memory.py                  # 长程记忆与上下文压缩
-│   ├── skills.py                  # 内置和 workspace skills 加载
-│   └── tools/
-│       ├── delegate.py            # 调用注册型专业子 Agent
-│       ├── embodied.py            # 写入机器人动作
-│       ├── filesystem.py          # read / write / edit / list
-│       ├── message.py             # 当前任务进度消息
-│       ├── scene_graph.py         # 查询 ROBOT_STATE.md
-│       ├── shell.py               # workspace Shell 工具
-│       └── update_plan.py         # PLAN.md 状态更新
-│
-├── base/
-│   ├── tool.py                    # Tool 抽象接口
-│   └── registry.py                # ToolRegistry
-│
-├── bus/                           # CLI 与 AgentLoop 使用的消息队列
-├── cli/commands.py                # onboard / agent / status / provider
-├── config/                        # 配置 schema、加载与运行路径
-├── providers/                     # LiteLLM、Azure、Codex、兼容端点
-├── session/                       # workspace/sessions/*.jsonl
-├── skills/                        # 主 Agent 内置 skills
-│   ├── object-location/           # 何时委派精确定位
-│   └── task-verification/         # 何时委派动作结果验证
-├── templates/                     # workspace 初始模板
-│
-└── subagents/
-    ├── base.py                    # BaseSubagent 公共执行循环
-    ├── content.py                 # 文本、图片等多模态输入
-    ├── context.py                 # 每次调用的独立上下文
-    ├── models.py                  # 任务、描述符、任意结构结果
-    ├── registry.py                # 完整子 Agent 实例注册表
-    ├── skills.py                  # 子 Agent 私有 SkillRegistry
-    └── object_location/
-        ├── main.py                # 独立对话入口
-        ├── register.py            # 组装并注册实例内部能力
-        ├── agent.py / context.py
-        ├── skills/object-localization/SKILL.md
-        └── tools/                 # 观测、候选验证和定位工具
-    └── task_verification/
-        ├── main.py                # 独立对话入口
-        ├── register.py            # 组装验证实例
-        ├── agent.py / context.py
-        ├── skills/object-state-verification/SKILL.md
-        └── tools/                 # 多视角观测和结构化结果提交
+│   ├── loop.py                 # Main reasoning and tool-use loop
+│   ├── context.py              # Workspace, memory, skill, and robot context
+│   ├── memory.py               # Context compaction and long-term memory
+│   ├── visual_monitor.py       # Asynchronous visual action monitor
+│   └── tools/                  # Files, shell, plan, delegation, and robot actions
+├── base/                       # Tool interfaces and registries
+├── bus/                        # Runtime message queue
+├── cli/
+│   ├── commands.py             # `emerge` entry point
+│   ├── management.py           # Workspace and provider commands
+│   └── headless.py             # Machine-only single-run client
+├── config/                     # Pydantic schema, loading, and paths
+├── providers/                  # Provider registry and implementations
+├── runtime/
+│   ├── protocol.py             # RunRequest, RunEvent, and RunResult
+│   ├── service.py              # Shared execution authority
+│   ├── storage.py              # Workspace lease and run artifacts
+│   └── snapshots.py            # Workspace and service status snapshots
+├── session/                    # Persistent conversation sessions
+├── skills/                     # Built-in main-agent skills
+├── subagents/
+│   ├── object_location/        # Multi-view object localization
+│   └── task_verification/      # Visual post-action verification
+├── templates/                  # Initial workspace documents
+└── tui/                        # Full-screen interactive client
 ```
 
-## 3. 运行配置
+## Installation
 
-默认配置文件：
-
-```text
-~/.Emerge/config.json
-```
-
-默认 workspace：
-
-```text
-~/.Emerge/workspace
-```
-
-两个视觉子 Agent 的配置位于 `subagents.objectLocation` 和
-`subagents.taskVerification`：
-
-```json
-{
-  "subagents": {
-    "objectLocation": {
-      "model": "openai/gpt-5.5",
-      "vggtUrl": "ws://localhost:8001",
-      "sam3Url": "ws://localhost:8002",
-      "timeout": 120.0,
-      "maxIterations": 8,
-      "viewCenterToleranceM": 0.08,
-      "rayConsensusToleranceM": 0.02
-    },
-    "taskVerification": {
-      "model": "openai/gpt-5.5",
-      "maxIterations": 4
-    }
-  }
-}
-```
-
-运行时采用 camelCase 配置键；Python 中对应 `config.subagents.object_location` 和
-`config.subagents.task_verification`。
-`viewCenterToleranceM` 用于 VGGT 深度中心的后备一致性检查；精度更高的标定射线共识使用
-独立的 `rayConsensusToleranceM`。
-
-## 4. 常用命令
-
-从仓库根目录安装：
+Install the project from the repository root:
 
 ```bash
 pip install -e .
 ```
 
-项目要求 Python 3.10 或更高版本。首次创建或刷新配置：
+Python 3.10 or later is required. Robot environments, external model servers, checkpoints, and evaluation dependencies are documented in the repository-level README and the guides under `scripts/`.
+
+## Initialize the workspace
+
+Create the default configuration and workspace:
 
 ```bash
-python -m Emerge onboard
-# 等价：emerge onboard
+emerge workspace init
 ```
 
-启动主 Agent 交互终端：
+This creates:
 
-```bash
-python -m Emerge agent
-# 等价：emerge agent
+```text
+~/.Emerge/config.json
+~/.Emerge/workspace/
 ```
 
-单次执行任务：
+Running the command again refreshes the configuration schema and adds missing workspace templates without replacing existing workspace files unless configuration overwrite is explicitly confirmed.
+
+Inspect the active paths, model, and provider state with:
 
 ```bash
-python -m Emerge agent -m "Find the salad dressing"
+emerge workspace status
 ```
 
-指定配置、workspace 和 session：
+## Configuration
+
+Configuration files use camelCase keys. A compact configuration looks like this:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.Emerge/workspace",
+      "model": "anthropic/claude-opus-4-5",
+      "provider": "auto",
+      "maxTokens": 8192,
+      "contextWindowTokens": 65536,
+      "temperature": 0.1,
+      "maxToolIterations": 40
+    }
+  },
+  "visualMonitor": {
+    "enabled": true,
+    "pollIntervalSeconds": 0.5,
+    "verificationTimeoutSeconds": 30.0,
+    "confirmations": 1
+  },
+  "subagents": {
+    "objectLocation": {
+      "model": null,
+      "vggtUrl": "ws://localhost:8001",
+      "sam3Url": "ws://localhost:8002",
+      "timeout": 120.0,
+      "maxIterations": 8
+    },
+    "taskVerification": {
+      "model": null,
+      "maxIterations": 2
+    }
+  },
+  "providers": {
+    "anthropic": {
+      "apiKey": "YOUR_API_KEY"
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": false,
+    "exec": {
+      "timeout": 60,
+      "pathAppend": ""
+    }
+  }
+}
+```
+
+When a specialist sub-agent has no model override, it uses the main agent model. Set `tools.restrictToWorkspace` to `true` when file and shell access must remain inside the configured workspace.
+
+The provider registry supports Anthropic, OpenAI, OpenRouter, Azure OpenAI, DeepSeek, Gemini, Groq, DashScope, Moonshot, MiniMax, Zhipu, AiHubMix, SiliconFlow, VolcEngine, custom OpenAI-compatible endpoints, vLLM, Ollama, OpenAI Codex OAuth, and GitHub Copilot OAuth. With `provider` set to `auto`, Emerge resolves the provider from the model prefix and configured credentials.
+
+OAuth login commands are:
 
 ```bash
-python -m Emerge agent \
+emerge provider login openai-codex
+emerge provider login github-copilot
+```
+
+## Interactive client
+
+Start the full-screen terminal client:
+
+```bash
+emerge
+```
+
+Optional overrides apply to the runs started by that client:
+
+```bash
+emerge \
   --config ~/.Emerge/config.json \
   --workspace ~/.Emerge/workspace \
-  --session cli:direct
+  --session cli:demo \
+  --model anthropic/claude-opus-4-5
 ```
 
-检查当前配置状态：
+Type `/` in an empty prompt to open the command palette. Available operations include starting a new session, resuming a saved session, changing the model, stopping a run, checking service health, viewing logs, toggling tool details, inspecting workspace paths, exporting the conversation, and viewing recent run artifacts.
+
+## Headless runtime
+
+Use the headless client for evaluations, scripts, and other machine integrations:
 
 ```bash
-python -m Emerge status
+python -m Emerge.cli.headless \
+  "Put the red block in the basket" \
+  --workspace ~/.Emerge/workspace \
+  --session eval:episode-001 \
+  --timeout-s 600
 ```
 
-OAuth provider 登录：
+It writes exactly one `RunResult` JSON object to standard output. Diagnostics go to standard error. Unless `--output-dir` is provided, artifacts are stored under:
+
+```text
+<workspace>/runs/<run_id>/
+├── request.json
+├── events.jsonl
+├── result.json
+└── runtime.log
+```
+
+A request file can provide the versioned contract directly:
+
+```json
+{
+  "schema_version": "Emerge.run_request.v1",
+  "run_id": "episode_001",
+  "session_id": "eval:episode-001",
+  "message": "Put the red block in the basket",
+  "workspace": "/absolute/path/to/workspace",
+  "timeout_s": 600,
+  "cancel_timeout_s": 10,
+  "stream": true,
+  "metadata": {
+    "suite": "libero"
+  }
+}
+```
+
+Run it with:
 
 ```bash
-python -m Emerge provider login openai-codex
-python -m Emerge provider login github-copilot
+python -m Emerge.cli.headless --request request.json
 ```
 
-当前不存在 `chat` 和 `gateway` 子命令；交互入口统一使用 `agent`。
+`RunResult.run_status` is one of `completed`, `failed`, `cancelled`, or `timed_out`. Cancellation data acknowledges whether physical execution was stopped; it is not a benchmark success signal.
 
-## 5. 外部模型服务
+Only one runtime may own a workspace at a time. `WorkspaceLease` prevents concurrent writers from issuing conflicting robot actions or mutating the same run state.
 
-OpenPI、VGGT 和 SAM3 都位于仓库根目录的 `external_model_server/`，统一启动命令为：
+## Agent context and workspace contract
+
+The workspace is the boundary between language-level reasoning and the robot controller. The runtime creates missing templates before a run, while preserving existing files.
+
+| Path | Owner and purpose |
+|---|---|
+| `AGENTS.md` | User-maintained instructions for the main agent |
+| `EMBODIED.md` | Active robot capabilities and action conventions |
+| `ROBOT_STATE.md` | Controller-written robot and scene state |
+| `PLAN.md` | Agent-maintained task plan and progress |
+| `ACTION.md` | Action queue shared by the agent and controller |
+| `memory/MEMORY.md` | Consolidated long-term memory |
+| `artifacts/observations/observation.json` | Current multi-camera observation manifest |
+| `sessions/*.jsonl` | Persistent conversation histories |
+| `runs/<run_id>/` | Structured headless run artifacts |
+| `skills/` | Optional workspace-local skills |
+
+At the start of a turn, the context builder combines the active instructions, robot state, plan, memory, and relevant skills. The agent must re-read `ROBOT_STATE.md` after each physical action because the copy included in its original context becomes stale as soon as the controller moves the robot.
+
+## Tools and skills
+
+The main agent registers these tools:
+
+| Tool | Purpose |
+|---|---|
+| `read_file`, `write_file`, `edit_file`, `list_dir` | Inspect and update workspace files |
+| `exec` | Run a shell command with configured timeout and path policy |
+| `update_plan` | Update protected plan state safely |
+| `message` | Emit a concise progress message |
+| `delegate_subagent` | Run a registered specialist sub-agent |
+| `execute_robot_action` | Validate, enqueue, monitor, and await a robot action |
+| `query_scene_graph` | Query structured facts from current robot state |
+
+Built-in skills define operating procedures for planning, progress reporting, memory, object localization, task verification, geometric attachment, VLA control, and WAM control. Workspace-local skills can be added under `<workspace>/skills/<name>/SKILL.md`.
+
+### Robot action backends
+
+`execute_robot_action` always exposes geometry-driven actions such as `move_to_pose`, `move_linear`, `set_gripper`, and `follow_arc`. A run may additionally enable one model-policy backend:
 
 ```bash
-bash scripts/model_server/start_external_model_servers.sh
+EMERGE_POLICY_BACKEND=vla   # enables vla_execute
+EMERGE_POLICY_BACKEND=wam   # enables wam_execute
 ```
 
-默认分配如下：
+The evaluation launcher normally sets this variable. When a backend is selected, the other model-policy action is rejected, while geometry-driven actions remain available.
 
-| 服务 | 端口 | conda 环境 |
-|---|---:|---|
-| OpenPI | 8000 | `pi05_server` |
-| VGGT | 8001 | `EmergePolicy` |
-| SAM3 | 8002 | `EmergePolicy` |
+For VLA, the agent provides a phase-local natural-language instruction and a step budget. For WAM, the agent provides the next unfinished contact phase; the evaluator separately supplies and locks the task-conditioning mode and full task instruction.
 
-GPU 和 OpenPI batch 参数可以通过环境变量覆盖：
+Each accepted action is appended to `ACTION.md`. The controller executes it, updates its status, and refreshes `ROBOT_STATE.md`. The tool waits for a terminal action result and participates in runtime cancellation, so a run cannot report clean completion while robot actions remain active.
 
-```bash
-OPENPI_GPU=3,4,5 \
-OPENPI_MAX_BATCH_SIZE=1 \
-VGGT_GPU=1 \
-SAM3_GPU=2 \
-bash scripts/model_server/start_external_model_servers.sh
+## Specialist sub-agents
+
+### Object location
+
+The `object_location` sub-agent locates movable objects, destinations, obstacles, and visible task-relevant fixtures from calibrated camera views. Its private tool chain is:
+
+```text
+observe_scene
+      -> segment_candidates (SAM3 + cached VGGT geometry)
+      -> visual candidate verification
+      -> locate_candidates (multi-view world-frame result)
 ```
 
-## 6. 单独运行 Object Location Subagent
+It reads `artifacts/observations/observation.json`, compares plausible candidates across the enabled views, segments them, rejects inconsistent masks using calibrated-view consensus, and returns compact world-frame positions, dimensions, orientations, and scene context. Internal prompts, masks, residuals, and point-cloud diagnostics remain private to the sub-agent.
 
-交互模式：
-
-```bash
-python -m Emerge.subagents.object_location.main
-```
-
-单次任务：
+Run it directly for diagnosis:
 
 ```bash
 python -m Emerge.subagents.object_location.main \
-  --task "Find the salad dressing"
+  --task "Locate the salad dressing"
 ```
 
-还可以使用 `--config`、`--workspace` 和 `--model` 覆盖运行参数。该实例要求 workspace 中已经存在：
+### Task verification
 
-```text
-artifacts/observations/observation.json
-```
+The `task_verification` sub-agent inspects current multi-camera images after an action. It decomposes the requested result into visible predicates and submits an `achieved`, `not_achieved`, or `uncertain` result with evidence. It does not control the robot and does not require VGGT or SAM3.
 
-清单中的每个启用视角都应提供图片路径、`intrinsics` 和 `T_world_camera`。Controller 逐相机覆盖保存图片并覆盖更新该清单；定位时由整个清单参与 VGGT 重建，再在合并目标点云时选择一致视角。
-
-当前定位数据流统一使用相机原始 `512×512` RGB：多模态模型查看原图，SAM3 在原图上分割，VGGT 输出同尺寸 depth 和 point map，mask overlay 也保持 512。VGGT 内部仅为满足 14 像素 patch 要求把右侧和下侧 padding 到 518，推理后立即裁回 512，不改变内参和像素坐标。
-
-子 Agent 只读取当前完整视角，不读取物体参考图或 `ROBOT_STATE.md`。多模态模型根据用户
-给出的语义目标和现场可见证据比较所有合理物理候选，再为各候选生成纯外观 SAM3 prompt。
-`segment_candidates` 一次分割全部候选，把带 `candidate_id` 的 mask overlay 作为多模态
-结果返回。子 Agent 回看每个视角，提交同一物体真正匹配的 `verified_views`，再调用
-`locate_candidates`。
-
-最终定位使用已知相机标定下的 bbox 射线共识剔除跳到其他物体的 mask，以三角化中心校正
-各视角 VGGT 局部点云，再做姿态估计。最后一步复用本轮缓存的 VGGT geometry 和 SAM3
-masks，不会再次请求两个模型 server。
-
-## 7. 单独运行 Task Verification Subagent
-
-交互模式：
-
-```bash
-python -m Emerge.subagents.task_verification.main
-```
-
-单次验证：
+Run it directly for diagnosis:
 
 ```bash
 python -m Emerge.subagents.task_verification.main \
-  --task "Verify whether the apple is inside the basket and released"
+  --task "Verify that the apple is inside the basket and released"
 ```
 
-该实例读取同一份 `artifacts/observations/observation.json` 和当前完整视角，将目标结果拆成
-可见条件，再通过 `submit_task_verification` 提交证据。它不调用 VGGT、SAM3 或坐标定位，
-整体结果由代码根据所有必需条件计算为 `achieved`、`not_achieved` 或 `uncertain`。
+### Visual monitor
 
-## 8. 主 Agent 调用子 Agent
+When enabled, the visual monitor observes action progress independently of the main reasoning loop. It uses the current plan, action, and camera observations to detect visible subgoal completion. A confirmed result can request an early stop for the active action, after which the main agent resumes from freshly written robot state.
 
-主 Agent 有两个对应的常驻 skills：`object-location` 指导动作前的精确定位，
-`task-verification` 指导动作后的结果检查。两者都通过 `delegate_subagent` 调用完整子 Agent，
-但分别使用 `object_location` 和 `task_verification` 两个注册名。
+## Sessions and memory
 
-主 Agent 注册的工具名为 `delegate_subagent`。模型发起的内部参数形如：
+Each run has a `session_id`. Messages are persisted in the workspace so the TUI or a later headless request can resume the same conversation. When the prompt approaches `contextWindowTokens`, the memory subsystem consolidates older information into long-term memory instead of relying on an unbounded message history.
 
-```json
-{
-  "agent_name": "object_location",
-  "task": "Locate the salad dressing precisely and describe nearby obstacles."
-}
+Run token usage in `RunResult` currently covers the main agent. Specialist sub-agent usage is not included in that field.
+
+## External services
+
+Emerge connects to external services but does not launch them from inside the package:
+
+- The robot or simulator controller consumes `ACTION.md`, writes results, updates `ROBOT_STATE.md`, and publishes observations.
+- The object-location sub-agent connects to VGGT at `ws://localhost:8001` and SAM3 at `ws://localhost:8002` by default.
+- VLA and WAM inference are executed by the active controller integration and their model servers.
+
+Use the repository scripts under `scripts/model_server/` and the evaluation guides under `scripts/` to start the required service combination for a task.
+
+## Extension points
+
+- **Main-agent tool:** implement `Tool` under `agent/tools/` and register it in `AgentLoop._register_default_tools()`.
+- **Main-agent skill:** add `skills/<name>/SKILL.md`, or install it only for one workspace under `<workspace>/skills/`.
+- **Specialist sub-agent:** provide an isolated agent, context builder, skill registry, tool registry, and `register.py`, then add the assembled instance to the main `SubagentRegistry`.
+- **Provider:** add a `ProviderSpec`, a matching configuration field, and a provider implementation when the LiteLLM adapter is insufficient.
+- **Runtime client:** construct `RunRequest`, call `AgentRuntime.run()`, and consume `RunEvent` callbacks and the final `RunResult`.
+- **Workspace protocol:** add a template and explicitly load or consume it in the context builder, agent tool, or controller.
+
+## Development checks
+
+Run the package tests from the repository root:
+
+```bash
+pytest tests
 ```
 
-该调用是异步 coroutine，但当前主 Agent 回合会 `await` 定位结果。它不会阻塞整个 asyncio 事件循环，也不是启动后立即返回的后台任务。
+Useful interface checks:
 
-返回内容包含：
-
-```json
-{
-  "status": "success",
-  "agent_name": "object_location",
-  "summary": "Localized: salad_dressing.",
-  "output": {
-    "objects": [
-      {
-        "name": "salad_dressing",
-        "found": true,
-        "frame": "world",
-        "position_m": [0.0997, -0.1923, 0.0503],
-        "size_m": [0.0469, 0.0367, 0.1176],
-        "rpy_rad": [0.0, 0.0, -1.10]
-      }
-    ],
-    "scene_context": "The target is near several containers and a woven basket."
-  },
-  "error": null
-}
+```bash
+emerge --help
+emerge workspace --help
+python -m Emerge.cli.headless --help
+python -m Emerge.subagents.object_location.main --help
+python -m Emerge.subagents.task_verification.main --help
 ```
 
-动作后的验证调用示例：
-
-```json
-{
-  "agent_name": "task_verification",
-  "task": "Verify whether the apple is inside the basket and has been released by the gripper."
-}
-```
-
-对应的精简结果形如：
-
-```json
-{
-  "status": "success",
-  "agent_name": "task_verification",
-  "summary": "Verification outcome: achieved.",
-  "output": {
-    "outcome": "achieved",
-    "predicates": [
-      {
-        "name": "apple_inside_basket",
-        "value": true,
-        "evidence": "The apple is visibly below the basket rim."
-      },
-      {
-        "name": "apple_released",
-        "value": true,
-        "evidence": "The open gripper is separated from the apple."
-      }
-    ],
-    "scene_context": "The basket remains upright."
-  },
-  "error": null
-}
-```
-
-主 Agent 只接收上述精简字段。定位过程的 SAM prompt、候选 ID、视角选择、射线残差、点云
-数量和几何对齐信息保留在 `object_location` 内部。两个子 Agent 都不直接控制机器人，主 Agent
-根据定位或验证结果继续规划并调用具身动作工具。
-
-同一动作阶段需要定位多个相关物体时，应在一次 `task` 中一起委派，使它们共享同一组观测和
-重建结果。返回 `found: false` 时，主 Agent 必须把位置视为未知，不能自行猜测世界坐标。
-定位和动作后验证应分成两次委派，因为两者对应不同的物理场景时刻。验证结果为
-`not_achieved` 时继续修正，为 `uncertain` 时补充观察；两者都不能作为任务成功。
-
-## 9. Workspace 契约
-
-| 文件 | 用途 |
-|---|---|
-| `AGENTS.md` | 主 Agent 指令 |
-| `EMBODIED.md` | 当前具身系统能力说明 |
-| `ROBOT_STATE.md` | Controller 回写的机器人与场景运行状态 |
-| `PLAN.md` | 主 Agent 当前任务状态 |
-| `ACTION.md` | Controller 消费的动作队列 |
-| `memory/MEMORY.md` | 长程记忆 |
-| `artifacts/observations/observation.json` | 多相机图片与标定清单 |
-| `sessions/*.jsonl` | 会话历史 |
-
-## 10. 扩展方式
-
-- 新增主 Agent tool：在 `agent/tools/` 实现 `Tool`，并在 `AgentLoop._register_default_tools()` 注册。
-- 新增主 Agent skill：创建 `skills/<name>/SKILL.md`。
-- 新增专业子 Agent：在 `subagents/<name>/` 放置自己的 agent、context、skills、tools 和 `register.py`，组装完成后把实例注册到主 Agent 的 `SubagentRegistry`。
-- 新增 provider：扩展 `providers/registry.py`、provider 实现和 `config/schema.py`。
-- 新增 workspace 契约：添加模板，并按需要加入 `ContextBuilder` 的加载列表。
-
-代码行为与文档不一致时，以当前代码为准。
+When this document and the implementation disagree, the current code is authoritative.

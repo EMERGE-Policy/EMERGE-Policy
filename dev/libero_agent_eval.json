@@ -107,5 +107,22 @@
     "replan_steps": 7,
     "stop_on_success": false,
     "timeout": 120.0
+  },
+  "wam": {
+    "server_url": "ws://127.0.0.1:8003",
+    "base_image_key": "agentview_image",
+    "wrist_image_key": "robot0_eye_in_hand_image",
+    "chunk_size": 16,
+    "num_open_loop_steps": 16,
+    "replan_steps": 16,
+    "stop_on_success": true,
+    "conditioning_mode": "task",
+    "lock_conditioning_mode": true,
+    "timeout": 180.0,
+    "seed": 1,
+    "search": {
+      "num_candidates": 4,
+      "score_mode": "joint_value"
+    }
   }
 }

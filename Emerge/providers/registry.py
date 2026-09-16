@@ -29,7 +29,7 @@ class ProviderSpec:
     name: str  # config field name, e.g. "dashscope"
     keywords: tuple[str, ...]  # model-name keywords for matching (lowercase)
     env_key: str  # LiteLLM env var, e.g. "DASHSCOPE_API_KEY"
-    display_name: str = ""  # shown in `emerge wsinit`
+    display_name: str = ""  # shown in `emerge workspace status`
 
     # model prefixing
     litellm_prefix: str = ""  # "dashscope" → model becomes "dashscope/{model}"

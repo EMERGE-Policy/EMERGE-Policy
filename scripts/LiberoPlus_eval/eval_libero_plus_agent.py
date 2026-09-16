@@ -7,7 +7,7 @@ seven robustness dimensions (Camera Viewpoints, Robot Initial States, Language
 Instructions, Light Conditions, Background Textures, Sensor Noise, Objects Layout).
 
 This driver reuses the entire episode lifecycle from ``eval_libero_agent`` (watchdog +
-agent + libero_mujoco driver + pi0.5 policy server, all unchanged). It adds the
+agent + libero_mujoco driver + selected VLA/WAM policy server, all unchanged). It adds the
 things that are specific to LIBERO-Plus:
 
   1. It points ``libero_source_path`` at the LIBERO-Plus tree, so ``suite.get_task(id)``
@@ -21,8 +21,9 @@ things that are specific to LIBERO-Plus:
      ``benchmark/task_classification.json`` (task id -> category), and writes a
      dimension grid alongside the standard summary.
 
-The policy is pi0.5, exactly as configured in dev/libero_plus_eval.json. Nothing in
-the agent, controller, driver, VLA executor, or policy server is modified.
+The policy backend is selected with ``--policy-backend``. WAM reuses the standard
+LIBERO WAM embodiment profile. Nothing in the agent, controller, driver, policy
+executors, or policy servers is modified.
 """
 
 from __future__ import annotations
@@ -365,6 +366,10 @@ def _write_evaluation_plan(
     seed: int,
     selected_task_ids: dict[str, dict[str, list[int]]],
     specs: list[dict[str, Any]],
+    policy_backend: str,
+    wam_conditioning_mode: str,
+    driver_config_path: Path,
+    profile_path: Path,
     resume: bool,
 ) -> None:
     """Persist the deterministic selection that makes resume reproducible."""
@@ -375,6 +380,14 @@ def _write_evaluation_plan(
         "start_trial": start_trial,
         "seed": seed,
         "episode_keys": [spec["key"] for spec in specs],
+        "policy_backend": policy_backend,
+        "wam_conditioning_mode": (
+            wam_conditioning_mode if policy_backend == "wam" else None
+        ),
+        "profile_path": base._display_path(profile_path),
+        "profile_sha256": base._sha256_file(profile_path),
+        "driver_config_path": base._display_path(driver_config_path),
+        "driver_config_sha256": base._sha256_file(driver_config_path),
     }
     plan_path = output_dir / "evaluation_plan.json"
     if resume and plan_path.exists():
@@ -382,13 +395,14 @@ def _write_evaluation_plan(
         previous = {key: existing.get(key) for key in stable_plan}
         if previous != stable_plan:
             raise ValueError(
-                "resume arguments do not match evaluation_plan.json; use the same "
-                "dimensions, count, trial, and seed, or choose a new output directory"
+                "resume arguments, policy backend, or profile do not match "
+                "evaluation_plan.json; use the original settings or choose a new "
+                "output directory"
             )
     base._atomic_write_json(
         plan_path,
         {
-            "schema_version": "Emerge.libero_plus_evaluation_plan.v1",
+            "schema_version": "Emerge.libero_plus_evaluation_plan.v2",
             "updated_at": base._utc_now(),
             **stable_plan,
         },
@@ -591,6 +605,13 @@ def main() -> int:
     for action in parser._actions:
         if action.dest in {"suite", "task_ids", "full"}:
             action.help = argparse.SUPPRESS
+        elif action.dest == "policy_backend":
+            action.choices = ("vla", "wam")
+            action.default = "wam"
+            action.help = (
+                "Policy and profile used for LIBERO-Plus evaluation "
+                "(default: wam)."
+            )
     # Re-default trials to the LIBERO-Plus protocol (1 trial per perturbed task).
     # None lets us distinguish an explicitly supplied --task-ids from its inherited
     # standard-LIBERO default.
@@ -673,6 +694,11 @@ def main() -> int:
             seed=args.seed,
         )
         _validate_bddl_sources(specs)
+        profile_path = base._policy_profile_path(
+            base_driver_config,
+            policy_backend=args.policy_backend,
+            override=args.profile_path,
+        )
         _write_evaluation_plan(
             output_dir,
             dimensions=dimensions,
@@ -681,6 +707,10 @@ def main() -> int:
             seed=args.seed,
             selected_task_ids=selected_task_ids,
             specs=specs,
+            policy_backend=args.policy_backend,
+            wam_conditioning_mode=args.wam_conditioning_mode,
+            driver_config_path=driver_config_path,
+            profile_path=profile_path,
             resume=args.resume,
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -698,20 +728,41 @@ def main() -> int:
             for suite in LIBERO_PLUS_SUITES
         )
         print(f"  {dimension}: {suite_counts}")
-    print(f"Policy: pi0.5 | Output: {output_dir}")
+    print(
+        f"Policy: {args.policy_backend} | "
+        f"Profile: {base._display_path(profile_path)} "
+        f"(sha256={base._sha256_file(profile_path)[:12]}) | Output: {output_dir}"
+    )
     if args.dry_run:
         for spec in specs:
             category = categories.get(spec["suite"], {}).get(spec["task_id"], "?")
             print(f"{spec['key']} | [{category}] | {spec['instruction']}")
         return 0
 
+    vla_server_url = args.vla_server_url or args.policy_server_url
+    wam_config = dict(base_driver_config.get("wam") or {})
+    wam_server_url = args.wam_server_url or str(
+        wam_config.get("server_url", "ws://127.0.0.1:8003")
+    )
     if (
-        not args.skip_policy_server_check
-        and not base._server_is_ready(args.policy_server_url)
+        args.policy_backend == "vla"
+        and not args.skip_policy_server_check
+        and not base._server_is_ready(vla_server_url)
     ):
         parser.error(
-            f"policy server is not reachable at {args.policy_server_url}; "
-            "start external_model_server/openpi_batch_server.py first or pass --skip-policy-server-check"
+            f"VLA policy server is not reachable at {vla_server_url}; "
+            "start external_model_server/openpi_batch_server.py first or pass "
+            "--skip-policy-server-check"
+        )
+    if (
+        args.policy_backend == "wam"
+        and not args.skip_wam_server_check
+        and not base._server_is_ready(wam_server_url)
+    ):
+        parser.error(
+            f"WAM policy server is not reachable at {wam_server_url}; "
+            "start external_model_server/cosmos_policy_server.py first or pass "
+            "--skip-wam-server-check"
         )
 
     stored_results = base._read_results(results_path)

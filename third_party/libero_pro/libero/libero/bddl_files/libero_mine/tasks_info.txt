@@ -1,2 +1,0 @@
-libero/bddl_files/libero_mine/Pick_up_the_alphabet_soup_and_place_it_in_the_basket.bddl
-libero/bddl_files/libero_mine/KITCHEN_SCENE1_catch_the_akita_black_bowl.bddl

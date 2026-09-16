@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import time
 from typing import Any, Callable
@@ -10,14 +9,10 @@ from typing import Any, Callable
 from loguru import logger
 import numpy as np
 
+from robot.policy_execution import PolicyExecutionResult
 
-@dataclass(slots=True)
-class VLAResult:
-    success: bool
-    total_steps: int
-    reason: str
-    error_message: str | None = None
-    last_gripper_command: float | None = None
+
+VLAResult = PolicyExecutionResult
 
 
 class VLAExecutor:
@@ -62,6 +57,7 @@ class VLAExecutor:
             return VLAResult(False, 0, "server_unavailable", "policy server health check failed")
         action_count = 0
         last_gripper: float | None = None
+        task_success = False
         inference_count = 0
         inference_wall_seconds = 0.0
         server_infer_seconds = 0.0
@@ -77,6 +73,7 @@ class VLAExecutor:
                         "interrupted",
                         cancel_reason,
                         last_gripper,
+                        task_success,
                     )
                 inference_started = time.perf_counter()
                 result = client.infer(self._build_element(instruction))
@@ -105,6 +102,7 @@ class VLAExecutor:
                             "interrupted",
                             cancel_reason,
                             last_gripper,
+                            task_success,
                         )
                     _, _, done, _ = self._environment.step(
                         action,
@@ -115,12 +113,34 @@ class VLAExecutor:
                     # following rule action can keep holding instead of
                     # re-deriving a slack signal from gripper qpos.
                     last_gripper = float(np.clip(action[6], -1.0, 1.0))
-                    if self.stop_on_success and self._environment.check_success():
-                        return VLAResult(True, action_count, "goal_reached", None, last_gripper)
+                    task_success = bool(self._environment.check_success())
+                    if self.stop_on_success and task_success:
+                        return VLAResult(
+                            True,
+                            action_count,
+                            "goal_reached",
+                            None,
+                            last_gripper,
+                            True,
+                        )
                     if done:
-                        return VLAResult(False, action_count, "environment_done", None, last_gripper)
+                        return VLAResult(
+                            False,
+                            action_count,
+                            "environment_done",
+                            None,
+                            last_gripper,
+                            task_success,
+                        )
                     if action_count >= step:
-                        return VLAResult(True, action_count, "step_completed", None, last_gripper)
+                        return VLAResult(
+                            True,
+                            action_count,
+                            "step_completed",
+                            None,
+                            last_gripper,
+                            task_success,
+                        )
         except Exception as exc:
             return VLAResult(
                 False,
@@ -128,6 +148,7 @@ class VLAExecutor:
                 "error",
                 f"{type(exc).__name__}: {exc}",
                 last_gripper,
+                task_success,
             )
         finally:
             if action_count:
