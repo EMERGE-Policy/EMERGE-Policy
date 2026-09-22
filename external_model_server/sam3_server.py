@@ -5,11 +5,18 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+from pathlib import Path
 from typing import Any, Hashable, Sequence
 
 import numpy as np
 
-from external_model_server.protocol import DynamicBatchInferenceServer
+from external_model_server.model_service.contracts import ServiceDescriptor
+from external_model_server.model_service.runtime import (
+    ModelServerRuntime,
+    add_runtime_arguments,
+    runtime_arguments,
+)
+from external_model_server.schemas import SAM3
 
 
 def _positive_int(value: str) -> int:
@@ -34,33 +41,28 @@ class SAM3InferenceService:
         config: dict[str, Any],
         *,
         backend: Any | None = None,
-        preload: bool = True,
     ) -> None:
-        if backend is None:
-            from external_model_server.sam3_backend import SAM3Backend
-
-            backend = SAM3Backend(config)
         self.backend = backend
         self.config = dict(config)
-        if preload:
-            self.backend._load_processor(
-                device=str(self.config.get("device", "cuda")).strip().lower(),
-                confidence_threshold=float(
-                    self.config.get("confidence_threshold", 0.5)
-                ),
-                resolution=int(self.config.get("resolution", 1008)),
-            )
 
     @property
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "service": "sam3",
-            "model_path": str(self.config.get("model_path", "")),
-            "resolution": int(self.config.get("resolution", 1008)),
-            "confidence_threshold": float(
-                self.config.get("confidence_threshold", 0.5)
-            ),
-        }
+    def descriptor(self) -> ServiceDescriptor:
+        return ServiceDescriptor(SAM3.service, self.config.get("model_id") or Path(self.config["model_path"]).name,
+                                 SAM3.input_schema, SAM3.output_schema, ("infer", "batch"))
+
+    def load(self) -> None:
+        if self.backend is None:
+            from external_model_server.sam3_backend import SAM3Backend
+            self.backend = SAM3Backend(self.config)
+        self.backend._load_processor(
+            device=str(self.config.get("device", "cuda")).strip().lower(),
+            confidence_threshold=float(self.config.get("confidence_threshold", 0.5)),
+            resolution=int(self.config.get("resolution", 1008)),
+        )
+
+    def close(self) -> None:
+        if self.backend is not None:
+            self.backend.close()
 
     def infer(self, request: dict[str, Any]) -> dict[str, Any]:
         return self.infer_batch([request])[0]
@@ -167,6 +169,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-warmup", action="store_true")
     parser.add_argument("--max-batch-size", type=_positive_int, default=1)
     parser.add_argument("--batch-wait-ms", type=_non_negative_float, default=0)
+    add_runtime_arguments(parser)
     return parser
 
 
@@ -178,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     config = {
         "model_path": args.model_path,
+        "model_id": args.model_id,
         "device": args.device,
         "confidence_threshold": args.confidence_threshold,
         "resolution": args.resolution,
@@ -185,12 +189,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         "warmup_prompt": args.warmup_prompt,
     }
     service = SAM3InferenceService(config)
-    DynamicBatchInferenceServer(
+    ModelServerRuntime(
         service,
         host=args.host,
         port=args.port,
         max_batch_size=args.max_batch_size,
         batch_wait_ms=args.batch_wait_ms,
+        **runtime_arguments(args),
     ).serve_forever()
 
 

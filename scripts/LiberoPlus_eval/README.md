@@ -7,9 +7,13 @@ Run all commands from the repository root:
 
 Prepare the following before running an evaluation:
 
-- The LIBERO-Plus source and perturbation assets must be under
-  `third_party/libero_plus/`. Its `libero/libero/assets/` directory must contain
-  the LIBERO-Plus assets.
+- The LIBERO-Plus source must be under `third_party/libero_plus/`. The source
+  checkout does not include the large asset bundle. Download `assets.zip` from
+  the official [Sylvest/LIBERO-plus Hugging Face dataset](https://huggingface.co/datasets/Sylvest/LIBERO-plus)
+  and extract it into `third_party/libero_plus/libero/libero/`, as described in
+  the root [installation guide](../../README.md#install-the-libero-plus-assets).
+  The resulting `third_party/libero_plus/libero/libero/assets/` directory must
+  contain the LIBERO-Plus assets.
 - ImageMagick must be installed in the isolated
   `third_party/imagemagick_env/.env/` directory. Install it from the repository
   root with `bash third_party/imagemagick_env/install.sh`. The evaluator configures
@@ -159,8 +163,6 @@ Streaming options are `--stream-host` (default: `127.0.0.1`), `--stream-port`
 | `--trials-per-task` | Must be `1` |
 | `--workers` | Concurrent episode count |
 | `--policy-backend` | `wam` (default) or `vla` |
-| `--vla-server-url` | OpenPI URL; default `ws://localhost:8000` |
-| `--wam-server-url` | Cosmos URL; default `ws://127.0.0.1:8003` |
 | `--wam-conditioning-mode` | `task` (default), `phase`, or `task_with_phase` |
 | `--seed` | Task-selection seed; default: `7` |
 | `--watchdog-ready-timeout-s` | MuJoCo startup timeout; Plus default: `600` seconds |

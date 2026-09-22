@@ -5,15 +5,18 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+from pathlib import Path
 from typing import Any, Hashable, Sequence
 
 import numpy as np
 
-from external_model_server.protocol import (
-    DynamicBatchInferenceServer,
-    FatalRequestError,
+from external_model_server.model_service.contracts import ServiceDescriptor
+from external_model_server.model_service.runtime import (
+    ModelServerRuntime,
+    add_runtime_arguments,
+    runtime_arguments,
 )
-
+from external_model_server.schemas import VGGT
 
 logger = logging.getLogger(__name__)
 _PATCH_SIZE = 14
@@ -41,26 +44,24 @@ class VGGTInferenceService:
         config: dict[str, Any],
         *,
         backend: Any | None = None,
-        preload: bool = True,
     ) -> None:
-        if backend is None:
-            from external_model_server.vggt_backend import VGGTBackend
-
-            backend = VGGTBackend(config)
         self.backend = backend
         self.config = dict(config)
-        if preload:
-            device = str(self.config.get("device", "cuda")).strip().lower()
-            self.backend._load_model(device)
 
     @property
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "service": "vggt",
-            "model_path": str(self.config.get("model_path", "")),
-            "input_mode": "native_resolution_patch_aligned_required",
-            "patch_size": _PATCH_SIZE,
-        }
+    def descriptor(self) -> ServiceDescriptor:
+        return ServiceDescriptor(VGGT.service, self.config.get("model_id") or Path(self.config["model_path"]).name,
+                                 VGGT.input_schema, VGGT.output_schema, ("infer", "batch"))
+
+    def load(self) -> None:
+        if self.backend is None:
+            from external_model_server.vggt_backend import VGGTBackend
+            self.backend = VGGTBackend(self.config)
+        self.backend._load_model(str(self.config.get("device", "cuda")).strip().lower())
+
+    def close(self) -> None:
+        if self.backend is not None:
+            self.backend.close()
 
     def infer(self, request: dict[str, Any]) -> dict[str, Any]:
         return self.infer_batch([request])[0]
@@ -105,10 +106,10 @@ class VGGTInferenceService:
                 )
             height, width = (int(rgb.shape[0]), int(rgb.shape[1]))
             if height % _PATCH_SIZE != 0 or width % _PATCH_SIZE != 0:
-                raise FatalRequestError(
+                raise ValueError(
                     "VGGT requires every RGB view height and width to be divisible "
                     f"by patch size {_PATCH_SIZE}; view {name!r} has "
-                    f"height={height}, width={width}. The entire VGGT server will stop."
+                    f"height={height}, width={width}."
                 )
             image_shapes.add(tuple(int(value) for value in rgb.shape))
             views.append(
@@ -171,6 +172,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-camera-center-rms-error-m", type=float, default=0.1)
     parser.add_argument("--max-batch-size", type=_positive_int, default=1)
     parser.add_argument("--batch-wait-ms", type=_non_negative_float, default=0)
+    add_runtime_arguments(parser)
     return parser
 
 
@@ -182,18 +184,20 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     config = {
         "model_path": args.model_path,
+        "model_id": args.model_id,
         "device": args.device,
         "precision": args.precision,
         "max_baseline_scale_relative_mad": args.max_baseline_scale_relative_mad,
         "max_camera_center_rms_error_m": args.max_camera_center_rms_error_m,
     }
     service = VGGTInferenceService(config)
-    DynamicBatchInferenceServer(
+    ModelServerRuntime(
         service,
         host=args.host,
         port=args.port,
         max_batch_size=args.max_batch_size,
         batch_wait_ms=args.batch_wait_ms,
+        **runtime_arguments(args),
     ).serve_forever()
 
 

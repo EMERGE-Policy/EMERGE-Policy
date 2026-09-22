@@ -107,8 +107,6 @@ task selection, and output directory.
 | `--task-ids` | `0`, `0,2,3`, `2-5`, or `all` |
 | `--trials-per-task` | Trials per task |
 | `--workers` | Concurrent environments |
-| `--vla-server-url` | OpenPI URL; default `ws://localhost:8000` |
-| `--wam-server-url` | Cosmos URL; default `ws://127.0.0.1:8003` |
 | `--wam-conditioning-mode` | `task` (default), `phase`, or `task_with_phase` |
 | `--profile-path` | Custom profile |
 | `--max-steps` | Maximum action steps per episode |

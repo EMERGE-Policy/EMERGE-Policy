@@ -141,8 +141,6 @@ Configuration files use camelCase keys. A compact configuration looks like this:
   "subagents": {
     "objectLocation": {
       "model": null,
-      "vggtUrl": "ws://localhost:8001",
-      "sam3Url": "ws://localhost:8002",
       "timeout": 120.0,
       "maxIterations": 8
     },
@@ -196,6 +194,44 @@ emerge \
 ```
 
 Type `/` in an empty prompt to open the command palette. Available operations include starting a new session, resuming a saved session, changing the model, stopping a run, checking service health, viewing logs, toggling tool details, inspecting workspace paths, exporting the conversation, and viewing recent run artifacts.
+
+## External model services
+
+`/health` discovers self-described services on local ports 8000–8099, including
+OpenPI, Cosmos, VGGT, SAM3, and future models. It shows the actual service name,
+endpoint, and readiness; `/details` also shows the model and instance ID.
+Only the configured local port range is scanned.
+
+Optional configuration (camelCase and snake_case keys are accepted):
+
+```json
+{
+  "modelServices": {
+    "host": "127.0.0.1",
+    "startPort": 8000,
+    "endPort": 8099,
+    "concurrency": 16,
+    "connectTimeout": 0.5,
+    "endpointTimeout": 2,
+    "scanTimeout": 15
+  },
+  "subagents": {
+    "objectLocation": {}
+  }
+}
+```
+
+Discovery selects a unique matching local instance for each requested service;
+multiple matches are reported as an error. The selected endpoint is retained by
+the client, not silently changed after failures. Discovery doesn't rewrite
+configuration. Policy driver configuration accepts an optional `model_id` and a
+`discovery` object using the snake_case discovery settings above.
+
+Public clients and servers must be upgraded together. Old plain-text health
+and old inference messages are not accepted. A timed-out or disconnected
+request isn't automatically replayed: the backend may already have executed it.
+See the [service guide](../scripts/model_server/README.md) and
+[adapter guide](../external_model_server/README.md).
 
 ## Headless runtime
 
@@ -345,7 +381,7 @@ Run token usage in `RunResult` currently covers the main agent. Specialist sub-a
 Emerge connects to external services but does not launch them from inside the package:
 
 - The robot or simulator controller consumes `ACTION.md`, writes results, updates `ROBOT_STATE.md`, and publishes observations.
-- The object-location sub-agent connects to VGGT at `ws://localhost:8001` and SAM3 at `ws://localhost:8002` by default.
+- The object-location sub-agent discovers VGGT and SAM3 by their service contracts.
 - VLA and WAM inference are executed by the active controller integration and their model servers.
 
 Use the repository scripts under `scripts/model_server/` and the evaluation guides under `scripts/` to start the required service combination for a task.
@@ -358,23 +394,5 @@ Use the repository scripts under `scripts/model_server/` and the evaluation guid
 - **Provider:** add a `ProviderSpec`, a matching configuration field, and a provider implementation when the LiteLLM adapter is insufficient.
 - **Runtime client:** construct `RunRequest`, call `AgentRuntime.run()`, and consume `RunEvent` callbacks and the final `RunResult`.
 - **Workspace protocol:** add a template and explicitly load or consume it in the context builder, agent tool, or controller.
-
-## Development checks
-
-Run the package tests from the repository root:
-
-```bash
-pytest tests
-```
-
-Useful interface checks:
-
-```bash
-emerge --help
-emerge workspace --help
-python -m Emerge.cli.headless --help
-python -m Emerge.subagents.object_location.main --help
-python -m Emerge.subagents.task_verification.main --help
-```
 
 When this document and the implementation disagree, the current code is authoritative.

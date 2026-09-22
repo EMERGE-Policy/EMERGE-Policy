@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import atexit
 import argparse
+import atexit
 import concurrent.futures as futures
 import copy
 import hashlib
@@ -19,8 +19,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from urllib import request as urllib_request
-from urllib.parse import urlparse, urlunparse
 
 import numpy as np
 
@@ -33,11 +31,14 @@ from Emerge.utils.action_queue import (  # noqa: E402
     parse_action_markdown,
 )
 from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
-from robot.mujoco_simulation.scene_io import (
+from external_model_server.model_service.discovery import ServiceDiscovery  # noqa: E402
+from external_model_server.schemas import OPENPI  # noqa: E402
+from robot.mujoco_simulation.scene_io import (  # noqa: E402
     default_robot_state_doc,
     load_robot_state_doc,
     save_robot_state_doc,
-)  # noqa: E402
+)
+from robot.wam.protocol import WAM_SERVICE  # noqa: E402
 
 DEFAULT_DRIVER_CONFIG = REPO_ROOT / "dev/libero_agent_eval.json"
 DEFAULT_LIBERO_SOURCE = REPO_ROOT / "third_party/openpi/third_party/libero"
@@ -353,8 +354,6 @@ def _episode_driver_config(
     episode_dir: Path,
     max_action_steps: int,
     num_steps_wait: int,
-    vla_server_url: str,
-    wam_server_url: str,
     wam_conditioning_mode: str,
     policy_backend: str,
     profile_path: Path,
@@ -366,12 +365,9 @@ def _episode_driver_config(
     config["profile_path"] = str(profile_path)
     config.setdefault("libero", {})["bddl_file_name"] = spec["bddl_file"]
     vla_config = config.setdefault("vla", {})
-    if policy_backend == "vla":
-        vla_config["server_url"] = vla_server_url
     vla_config["stop_on_success"] = True
     if policy_backend == "wam":
         wam_config = config.setdefault("wam", {})
-        wam_config["server_url"] = wam_server_url
         wam_config["stop_on_success"] = True
         wam_config["task_instruction"] = spec["instruction"]
         wam_config["conditioning_mode"] = wam_conditioning_mode
@@ -436,28 +432,8 @@ def _episode_driver_config(
     return config, path
 
 
-def _server_is_ready(url: str, timeout_s: float = 2.0) -> bool:
-    parsed = urlparse(url)
-    host = parsed.hostname
-    port = parsed.port
-    if not host or not port:
-        raise ValueError(f"policy server URL must include host and port: {url!r}")
-    health_url = urlunparse(
-        (
-            "https" if parsed.scheme == "wss" else "http",
-            parsed.netloc,
-            "/healthz",
-            "",
-            "",
-            "",
-        )
-    )
-    opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
-    try:
-        with opener.open(health_url, timeout=timeout_s) as response:
-            return response.status == 200
-    except (OSError, ValueError):
-        return False
+def _server_is_ready(expectation, timeout_s: float = 2.0) -> bool:
+    return ServiceDiscovery().is_ready(expectation, timeout=timeout_s)
 
 
 def _read_status(path: Path) -> dict[str, Any]:
@@ -775,10 +751,6 @@ def _run_episode(
 
     max_action_steps = args.max_steps or MAX_STEPS[spec["suite"]]
     stream_path = _stream_manifest_path(attempt_dir) if board is not None else None
-    wam_config = dict(base_driver_config.get("wam") or {})
-    wam_server_url = args.wam_server_url or str(
-        wam_config.get("server_url", "ws://127.0.0.1:8003")
-    )
     profile_path = _policy_profile_path(
         base_driver_config,
         policy_backend=args.policy_backend,
@@ -790,8 +762,6 @@ def _run_episode(
         episode_dir=attempt_dir,
         max_action_steps=max_action_steps,
         num_steps_wait=args.num_steps_wait,
-        vla_server_url=args.vla_server_url or args.policy_server_url,
-        wam_server_url=wam_server_url,
         wam_conditioning_mode=args.wam_conditioning_mode,
         policy_backend=args.policy_backend,
         profile_path=profile_path,
@@ -1150,21 +1120,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-python", default=sys.executable)
     parser.add_argument("--watchdog-python", default=sys.executable)
     parser.add_argument(
-        "--policy-server-url",
-        default="ws://localhost:8000",
-        help="Backward-compatible alias for --vla-server-url.",
-    )
-    parser.add_argument(
-        "--vla-server-url",
-        default=None,
-        help="OpenPI VLA server URL; defaults to --policy-server-url.",
-    )
-    parser.add_argument(
-        "--wam-server-url",
-        default=None,
-        help="Cosmos Policy WAM server URL; defaults to the driver config.",
-    )
-    parser.add_argument(
         "--policy-backend",
         choices=("vla", "wam"),
         default="wam",
@@ -1313,28 +1268,23 @@ def main() -> int:
             print(f"{spec['key']} | {spec['instruction']} | {spec['bddl_file']}")
         return 0
 
-    vla_server_url = args.vla_server_url or args.policy_server_url
-    wam_config = dict(base_driver_config.get("wam") or {})
-    wam_server_url = args.wam_server_url or str(
-        wam_config.get("server_url", "ws://127.0.0.1:8003")
-    )
     if (
         args.policy_backend == "vla"
         and not args.skip_policy_server_check
-        and not _server_is_ready(vla_server_url)
+        and not _server_is_ready(OPENPI)
     ):
         parser.error(
-            f"VLA policy server is not reachable at {vla_server_url}; "
-            "start external_model_server/openpi_batch_server.py first or pass "
+            "VLA policy server is not reachable through discovery; "
+            "start scripts/model_server/start_external_model_servers.sh --services openpi first or pass "
             "--skip-policy-server-check"
         )
     if (
         args.policy_backend == "wam"
         and not args.skip_wam_server_check
-        and not _server_is_ready(wam_server_url)
+        and not _server_is_ready(WAM_SERVICE)
     ):
         parser.error(
-            f"WAM policy server is not reachable at {wam_server_url}; "
+            "WAM policy server is not reachable through discovery; "
             "start external_model_server/cosmos_policy_server.py first or pass "
             "--skip-wam-server-check"
         )

@@ -8,10 +8,13 @@ import io
 import math
 from typing import Any, Mapping
 
+from external_model_server.model_service.contracts import ServiceExpectation
+
 REQUEST_SCHEMA_V1 = "Emerge.cosmos_policy_wam.request.v1"
 REQUEST_SCHEMA_V2 = "Emerge.cosmos_policy_wam.request.v2"
 REQUEST_SCHEMA = REQUEST_SCHEMA_V2
 RESPONSE_SCHEMA = "Emerge.cosmos_policy_wam.response.v1"
+WAM_SERVICE = ServiceExpectation("cosmos_policy_wam", REQUEST_SCHEMA, RESPONSE_SCHEMA)
 ERROR_SCHEMA = "Emerge.cosmos_policy_wam.error.v1"
 ACTION_DIM = 7
 MAX_SEARCH_CANDIDATES = 64

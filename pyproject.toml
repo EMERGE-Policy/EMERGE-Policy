@@ -95,7 +95,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["Emerge", "robot"]
+packages = ["Emerge", "robot", "external_model_server"]
 
 [tool.hatch.build.targets.wheel.sources]
 "Emerge" = "Emerge"
@@ -109,6 +109,7 @@ include = [
     "Emerge/skills/**/*.sh",
     "Emerge/subagents/**/skills/**/*.md",
     "robot/**/*.py",
+    "external_model_server/**/*.py",
     "robot/profiles/**/*.md",
 ]
 
@@ -116,6 +117,7 @@ include = [
 include = [
     "Emerge/",
     "robot/",
+    "external_model_server/",
     "bridge/",
     "README.md",
     "LICENSE",
@@ -129,7 +131,3 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 ignore = ["E501"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests", "checks"]

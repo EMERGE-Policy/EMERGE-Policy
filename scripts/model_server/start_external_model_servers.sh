@@ -16,6 +16,8 @@ PORT_CHECK_PYTHON="${PORT_CHECK_PYTHON:-}"
 SERVICES="${SERVICES:-cosmos,vggt,sam3}"
 
 OPENPI_PORT="${OPENPI_PORT:-8000}"
+MODEL_QUEUE_CAPACITY="${MODEL_QUEUE_CAPACITY:-64}"
+MODEL_SHUTDOWN_TIMEOUT="${MODEL_SHUTDOWN_TIMEOUT:-30}"
 VGGT_PORT="${VGGT_PORT:-8001}"
 SAM3_PORT="${SAM3_PORT:-8002}"
 WAM_PORT="${WAM_PORT:-8003}"
@@ -82,6 +84,8 @@ OpenPI:
   OPENPI_PYTHON                 Direct Python executable; bypasses OPENPI_ENV
                                 (default: empty)
   OPENPI_PORT                   Service port (default: 8000)
+  MODEL_QUEUE_CAPACITY          Public service queue capacity (default: 64)
+  MODEL_SHUTDOWN_TIMEOUT        Public service drain seconds (default: 30)
   OPENPI_GPU                    CUDA_VISIBLE_DEVICES (default: 0)
   OPENPI_CONFIG                 Training config name (default: pi05_libero)
   OPENPI_CHECKPOINT             Checkpoint directory
@@ -250,7 +254,7 @@ cleanup() {
         kill -TERM -- "-${pid}" "${pid}" 2>/dev/null || true
     done
 
-    for _attempt in {1..50}; do
+    for (( _attempt=0; _attempt<(MODEL_SHUTDOWN_TIMEOUT+5)*10; _attempt++ )); do
         local any_running=0
         for pid in "${PIDS[@]}"; do
             if kill -0 -- "-${pid}" 2>/dev/null || kill -0 "${pid}" 2>/dev/null; then
@@ -415,12 +419,14 @@ fi
 
 if service_enabled openpi; then
     openpi_command=(
-        "${OPENPI_PYTHON:-python}" -m external_model_server.openpi_batch_server
+        "${OPENPI_PYTHON:-python}" -m external_model_server.openpi_server
         --config-name "${OPENPI_CONFIG}"
         --checkpoint-dir "${OPENPI_CHECKPOINT}"
         --port "${OPENPI_PORT}"
         --max-batch-size "${OPENPI_MAX_BATCH_SIZE}"
         --batch-wait-ms "${OPENPI_BATCH_WAIT_MS}"
+        --queue-capacity "${MODEL_QUEUE_CAPACITY}"
+        --shutdown-timeout "${MODEL_SHUTDOWN_TIMEOUT}"
     )
     if [[ -n "${OPENPI_PYTHON}" ]]; then
         start_server_with_python \
@@ -446,7 +452,9 @@ if service_enabled vggt; then
         --model-path "${VGGT_CHECKPOINT}" \
         --port "${VGGT_PORT}" \
         --max-batch-size "${VGGT_MAX_BATCH_SIZE}" \
-        --batch-wait-ms "${VGGT_BATCH_WAIT_MS}"
+        --batch-wait-ms "${VGGT_BATCH_WAIT_MS}" \
+        --queue-capacity "${MODEL_QUEUE_CAPACITY}" \
+        --shutdown-timeout "${MODEL_SHUTDOWN_TIMEOUT}"
 fi
 
 if service_enabled sam3; then
@@ -458,7 +466,9 @@ if service_enabled sam3; then
         --model-path "${SAM3_CHECKPOINT}" \
         --port "${SAM3_PORT}" \
         --max-batch-size "${SAM3_MAX_BATCH_SIZE}" \
-        --batch-wait-ms "${SAM3_BATCH_WAIT_MS}"
+        --batch-wait-ms "${SAM3_BATCH_WAIT_MS}" \
+        --queue-capacity "${MODEL_QUEUE_CAPACITY}" \
+        --shutdown-timeout "${MODEL_SHUTDOWN_TIMEOUT}"
 fi
 
 if service_enabled cosmos; then
@@ -480,6 +490,8 @@ if service_enabled cosmos; then
         --port "${WAM_PORT}"
         --max-batch-size "${WAM_MAX_BATCH_SIZE}"
         --batch-wait-ms "${WAM_BATCH_WAIT_MS}"
+        --queue-capacity "${MODEL_QUEUE_CAPACITY}"
+        --shutdown-timeout "${MODEL_SHUTDOWN_TIMEOUT}"
     )
     if [[ -n "${T5_CACHE_DIR}" ]]; then
         wam_command+=(--t5-cache-dir "${T5_CACHE_DIR}")

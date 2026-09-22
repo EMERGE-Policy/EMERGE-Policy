@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
 
-from Emerge.subagents.object_location.tools.location.client import (
-    ModelServerClient,
-)
 from Emerge.subagents.object_location.tools.location.pose import (
     estimate_object_locations,
 )
 from Emerge.subagents.object_location.tools.observation import (
     ObservationStore,
 )
+from external_model_server.model_service.client import AsyncModelClient
+from external_model_server.schemas import SAM3, VGGT
 
 
 @dataclass(slots=True)
@@ -34,8 +33,6 @@ class LocationEngine:
         self,
         store: ObservationStore,
         *,
-        vggt_url: str,
-        sam3_url: str,
         timeout: float,
         point_conf_threshold: float,
         min_points: int,
@@ -43,10 +40,11 @@ class LocationEngine:
         view_center_tolerance_m: float,
         ray_consensus_tolerance_m: float,
         min_consistent_views: int,
+        discovery=None,
     ) -> None:
         self._store = store
-        self._vggt = ModelServerClient(vggt_url, timeout=timeout)
-        self._sam3 = ModelServerClient(sam3_url, timeout=timeout)
+        self._vggt = AsyncModelClient(VGGT, timeout=timeout, discovery=discovery)
+        self._sam3 = AsyncModelClient(SAM3, timeout=timeout, discovery=discovery)
         self._point_conf_threshold = point_conf_threshold
         self._min_points = min_points
         self._bbox_padding_pixels = bbox_padding_pixels
@@ -60,6 +58,9 @@ class LocationEngine:
         """Clear all model outputs cached for the previous sub-agent run."""
         self._geometry = None
         self._segmentation = None
+
+    async def close(self) -> None:
+        await asyncio.gather(self._vggt.close(), self._sam3.close())
 
     async def segment_candidates(
         self,

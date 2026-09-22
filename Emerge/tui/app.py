@@ -6,7 +6,6 @@ import io
 import json
 import time
 from collections import deque
-from pathlib import Path
 from uuid import uuid4
 
 from loguru import logger
@@ -15,7 +14,13 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
-    ConditionalContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window,
+    ConditionalContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Layout,
+    VSplit,
+    Window,
 )
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.lexers import Lexer
@@ -46,7 +51,7 @@ COMMANDS = [
     ("/model", "Set model for the next run"),
     ("/stop", "Stop the current run"),
     ("/refresh", "Refresh workspace data now"),
-    ("/health", "Probe perception services"),
+    ("/health", "Discover external model services"),
     ("/sidebar", "Show or hide workspace sidebar"),
     ("/details", "Show or hide tool details"),
     ("/logs", "Switch between conversation and logs"),
@@ -100,6 +105,7 @@ class WorkspaceApp:
         self.show_logs = False
         self.last_output = None
         self.health = []
+        self.health_task = None
         self.dirty = True
         self.snapshot = None
         self.snapshot_time = 0.0
@@ -383,8 +389,9 @@ class WorkspaceApp:
         elif command == "/refresh":
             self.refresh(force_snapshot=True)
         elif command == "/health":
-            self.health = [{"name": "Services", "status": "checking"}]
-            self.application.create_background_task(self.probe_health())
+            if self.health_task is None or self.health_task.done():
+                self.health = [{"name": "Services", "status": "checking"}]
+                self.health_task = self.application.create_background_task(self.probe_health())
         elif command == "/export":
             path = self.workspace / "exports" / (uuid4().hex + ".md")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -526,6 +533,8 @@ class WorkspaceApp:
 
     def _status_style(self, status):
         value = str(status or "unknown").lower()
+        value = {"starting": "pending", "checking": "running", "draining": "pending",
+                 "unavailable": "failed", "mismatch": "failed"}.get(value, value)
         return "status." + (
             value if value in {
                 "ready", "pending", "running", "completed", "failed",
@@ -660,6 +669,13 @@ class WorkspaceApp:
                 ("sidebar.label", "  ·  "),
                 (self._status_style(item["status"]), item["status"]),
             )
+            if item.get("url"):
+                row(("sidebar.path", item["url"]))
+            error = item.get("error") or item.get("detail")
+            if error:
+                row(("sidebar.warn", str(error)[:self.SIDEBAR_WIDTH - 2]))
+            if self.details and item.get("instance_id"):
+                row(("sidebar.label", f"{item['model_id']} · {item['instance_id'][:8]}"))
 
         if self.last_output:
             section("RUN ARTIFACTS", "sidebar.section.artifacts")
@@ -712,6 +728,9 @@ class WorkspaceApp:
             with patch_stdout(raw=True):
                 await self.application.run_async()
         finally:
+            if self.health_task is not None:
+                self.health_task.cancel()
+                await asyncio.gather(self.health_task, return_exceptions=True)
             ticker.cancel()
             await asyncio.gather(ticker, return_exceptions=True)
             logger.remove(sink)

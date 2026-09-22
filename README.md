@@ -102,7 +102,24 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-### 2. Install the Main `EmergePolicy` Environment
+### 2. Install the LIBERO-Plus Assets
+
+The LIBERO-Plus Git checkout does not include its large asset bundle. Download
+`assets.zip` from the official
+[Sylvest/LIBERO-plus Hugging Face dataset](https://huggingface.co/datasets/Sylvest/LIBERO-plus)
+and extract it into the checked-out submodule:
+
+```bash
+conda activate base
+python -m pip install --upgrade huggingface_hub
+hf download Sylvest/LIBERO-plus assets.zip \
+  --repo-type dataset \
+  --local-dir /tmp/libero-plus-assets
+unzip -q /tmp/libero-plus-assets/assets.zip \
+  -d third_party/libero_plus/libero/libero
+```
+
+### 3. Install the Main `EmergePolicy` Environment
 
 ```bash
 conda create -n EmergePolicy python=3.12 -y
@@ -118,7 +135,7 @@ python -m pip install \
 bash third_party/imagemagick_env/install.sh
 ```
 
-### 3. Install the Standalone OpenPI Environment `pi05_server`
+### 4. Install the Standalone OpenPI Environment `pi05_server`
 
 pi05 Policy runs in its own Conda environment; do not install its server
 dependencies into `EmergePolicy`.
@@ -135,7 +152,7 @@ GIT_LFS_SKIP_SMUDGE=1 uv pip install \
 cd ../..
 ```
 
-### 4. Install the Standalone Cosmos Policy Environment `cosmos-policy`
+### 5. Install the Standalone Cosmos Policy Environment `cosmos-policy`
 
 Cosmos Policy runs in its own Conda environment; do not install its server
 dependencies into `EmergePolicy`.
@@ -211,10 +228,22 @@ The launcher uses the `cosmos-policy` environment and the default paths under
 Check readiness from another terminal:
 
 ```bash
+# WAM
 curl http://127.0.0.1:8003/healthz
+
+# VLA
+curl http://127.0.0.1:8000/healthz
+
+# Shared perception services
 curl http://127.0.0.1:8001/healthz
 curl http://127.0.0.1:8002/healthz
 ```
+
+Public health responses are self-describing JSON: `service` identifies the model
+service and `status` reports readiness (HTTP 200 for `ready`, 503 otherwise).
+The CLI `/health` discovers local services starting at port 8000. OpenPI uses the
+same single public endpoint as the other model services.
+See the [model adapter guide](external_model_server/README.md) for the common contract.
 
 ## Model Checkpoints
 
@@ -235,7 +264,7 @@ loading independent from individual agent episodes.
 
 | Service | Port | Environment | Purpose |
 |---|---:|---|---|
-| OpenPI | 8000 | `pi05_server` | VLA action inference |
+| OpenPI | 8000 | `pi05_server` | VLA policy inference through the shared runtime |
 | VGGT | 8001 | `EmergePolicy` | Multi-view geometry estimation |
 | SAM3 | 8002 | `EmergePolicy` | Prompt-guided image segmentation |
 | Cosmos Policy | 8003 | `cosmos-policy` | WAM candidate action generation and scoring |

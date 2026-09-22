@@ -44,7 +44,17 @@ curl --noproxy '*' http://127.0.0.1:8001/healthz
 curl --noproxy '*' http://127.0.0.1:8002/healthz
 ```
 
-Check the selected policy service and both perception services. Expected response: `OK`.
+Public endpoints return JSON, including `schema: emerge.model-health.v1`,
+`service`, `instance_id`, `model_id`, `input_schema`, `output_schema`,
+`capabilities`, `protocol_version`, and `status`.
+HTTP 200 means `ready`; HTTP 503 reports `starting`, `draining`, or `failed`.
+Loading happens after the public listener starts, so startup is observable.
+Plain `OK` is not a valid public health response.
+
+The interactive CLI's `/health` discovers services on `127.0.0.1:8000–8099`
+and checks the local port range. Names come from the responding services; gaps
+in the port range don't stop discovery. See
+[client discovery configuration](../../Emerge/README.md#external-model-services).
 
 | Service | Conda environment | Port |
 | --- | --- | ---: |
@@ -52,6 +62,21 @@ Check the selected policy service and both perception services. Expected respons
 | OpenPI VLA | `pi05_server` | 8000 |
 | VGGT | `EmergePolicy` | 8001 |
 | SAM3 | `EmergePolicy` | 8002 |
+
+OpenPI uses the shared runtime directly. `openpi_server` loads the official
+OpenPI policy in its adapter, while `openpi_policy.py` supplies the
+policy-specific transforms and native batch inference helpers. There is one
+process, one endpoint, and no second network hop.
+
+Start OpenPI directly with:
+
+```bash
+python -m external_model_server.openpi_server \
+  --config-name pi05_libero \
+  --checkpoint-dir checkpoints/pi05_libero \
+  --port 8000
+```
+
 
 ## 3. Run evaluation
 
@@ -133,6 +158,7 @@ Override settings as environment variables before the launch command.
 | `OPENPI_ENV` / `WAM_ENV` / `PERCEPTION_ENV` | `pi05_server` / `cosmos-policy` / `EmergePolicy` |
 | `OPENPI_GPU` / `WAM_GPU` / `VGGT_GPU` / `SAM3_GPU` | `0` / `0` / `1` / `2` |
 | `OPENPI_PORT` / `WAM_PORT` / `VGGT_PORT` / `SAM3_PORT` | `8000` / `8003` / `8001` / `8002` |
+| `MODEL_QUEUE_CAPACITY` / `MODEL_SHUTDOWN_TIMEOUT` | `64` / `30` seconds |
 | `OPENPI_CHECKPOINT` | `checkpoints/pi05_libero` |
 | `VGGT_CHECKPOINT` / `SAM3_CHECKPOINT` | `checkpoints/vggt/model.pt` / `checkpoints/sam3/model.pt` |
 | `WAM_POLICY_CHECKPOINT` | `checkpoints/cosmos-policy/Cosmos-Policy-LIBERO-Predict2-2B.pt` |

@@ -9,12 +9,18 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 from PIL import Image
+from sam3.eval.postprocessors import PostProcessImage
 from sam3.model.utils.misc import copy_data_to_device
 from sam3.model_builder import build_sam3_image_model
-from sam3.eval.postprocessors import PostProcessImage
 from sam3.train.data.collator import collate_fn_api
-from sam3.train.data.sam3_image_dataset import Datapoint, FindQueryLoaded, Image as SAMImage, InferenceMetadata
-from sam3.train.transforms.basic_for_api import ComposeAPI, NormalizeAPI, RandomResizeAPI, ToTensorAPI
+from sam3.train.data.sam3_image_dataset import Datapoint, FindQueryLoaded, InferenceMetadata
+from sam3.train.data.sam3_image_dataset import Image as SAMImage
+from sam3.train.transforms.basic_for_api import (
+    ComposeAPI,
+    NormalizeAPI,
+    RandomResizeAPI,
+    ToTensorAPI,
+)
 
 from external_model_server.localization_types import TargetMask, TargetMaskResult
 
@@ -76,6 +82,12 @@ class SAM3Backend:
         self._batched_model: Any | None = None
         self._transform: Any | None = None
         self._postprocessor: Any | None = None
+
+    def close(self) -> None:
+        self._model = self._batched_model = None
+        self._transform = self._postprocessor = None
+        self._device = self._resolution = None
+        self._warmed_up = False
 
     def segment_view(
         self,

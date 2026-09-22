@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from loguru import logger
 import numpy as np
+from loguru import logger
 
 from robot.policy_execution import PolicyExecutionResult
 
@@ -271,8 +271,19 @@ class CosmosWAMExecutor:
 
     def _get_client(self) -> Any:
         if self._client is None:
+            from external_model_server.model_service.discovery import (
+                DiscoveryConfig,
+                ServiceDiscovery,
+            )
+
             from .client import CosmosWAMClient
 
-            endpoint = str(self.config.get("server_url", "ws://127.0.0.1:8003"))
-            self._client = CosmosWAMClient(endpoint, timeout=self.timeout)
+            discovery = ServiceDiscovery(
+                DiscoveryConfig(**self.config.get("discovery", {}))
+            )
+            self._client = CosmosWAMClient(
+                timeout=self.timeout,
+                model_id=self.config.get("model_id"),
+                discovery=discovery,
+            )
         return self._client

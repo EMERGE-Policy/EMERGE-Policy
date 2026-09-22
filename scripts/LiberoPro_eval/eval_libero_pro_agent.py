@@ -48,7 +48,6 @@ from environment_dimension import (  # noqa: E402
     prepare_environment_cache,
 )
 
-
 BASE_SUITE_ORDER = (
     "libero_goal",
     "libero_spatial",
@@ -1000,7 +999,6 @@ def _build_parser() -> argparse.ArgumentParser:
             action.default = "vla"
             action.help = "LIBERO-Pro currently supports the VLA backend only."
         elif action.dest in {
-            "wam_server_url",
             "wam_conditioning_mode",
             "skip_wam_server_check",
         }:
@@ -1178,12 +1176,11 @@ def main() -> int:
 
     if (
         not args.skip_policy_server_check
-        and not base._server_is_ready(args.vla_server_url or args.policy_server_url)
+        and not base._server_is_ready(base.OPENPI)
     ):
-        server_url = args.vla_server_url or args.policy_server_url
         parser.error(
-            f"policy server is not reachable at {server_url}; "
-            "start external_model_server/openpi_batch_server.py first or pass "
+            "policy server is not reachable through discovery; "
+            "start scripts/model_server/start_external_model_servers.sh --services openpi first or pass "
             "--skip-policy-server-check"
         )
 

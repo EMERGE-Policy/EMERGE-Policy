@@ -45,7 +45,10 @@ class ObjectLocationSubagent(BaseSubagent):
         self._location_engine.reset()
         self._candidate_tool.reset()
         self._location_tool.reset()
-        return await super()._run(task)
+        try:
+            return await super()._run(task)
+        finally:
+            await self._location_engine.close()
 
     def _tool_work_complete(self) -> bool:
         """Finish immediately once measured geometry is available."""

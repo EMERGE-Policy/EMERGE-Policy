@@ -739,28 +739,23 @@ def main() -> int:
             print(f"{spec['key']} | [{category}] | {spec['instruction']}")
         return 0
 
-    vla_server_url = args.vla_server_url or args.policy_server_url
-    wam_config = dict(base_driver_config.get("wam") or {})
-    wam_server_url = args.wam_server_url or str(
-        wam_config.get("server_url", "ws://127.0.0.1:8003")
-    )
     if (
         args.policy_backend == "vla"
         and not args.skip_policy_server_check
-        and not base._server_is_ready(vla_server_url)
+        and not base._server_is_ready(base.OPENPI)
     ):
         parser.error(
-            f"VLA policy server is not reachable at {vla_server_url}; "
-            "start external_model_server/openpi_batch_server.py first or pass "
+            "VLA policy server is not reachable through discovery; "
+            "start scripts/model_server/start_external_model_servers.sh --services openpi first or pass "
             "--skip-policy-server-check"
         )
     if (
         args.policy_backend == "wam"
         and not args.skip_wam_server_check
-        and not base._server_is_ready(wam_server_url)
+        and not base._server_is_ready(base.WAM_SERVICE)
     ):
         parser.error(
-            f"WAM policy server is not reachable at {wam_server_url}; "
+            "WAM policy server is not reachable through discovery; "
             "start external_model_server/cosmos_policy_server.py first or pass "
             "--skip-wam-server-check"
         )

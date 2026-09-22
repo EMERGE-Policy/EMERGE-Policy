@@ -100,7 +100,6 @@
     "follow_arc_steps": 100
   },
   "vla": {
-    "server_url": "ws://localhost:8000",
     "base_image_key": "agentview_image",
     "wrist_image_key": "robot0_eye_in_hand_image",
     "resize_size": 224,
@@ -109,7 +108,6 @@
     "timeout": 120.0
   },
   "wam": {
-    "server_url": "ws://127.0.0.1:8003",
     "base_image_key": "agentview_image",
     "wrist_image_key": "robot0_eye_in_hand_image",
     "chunk_size": 16,

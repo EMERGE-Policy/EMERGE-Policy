@@ -6,11 +6,10 @@ import math
 import time
 from typing import Any, Callable
 
-from loguru import logger
 import numpy as np
+from loguru import logger
 
 from robot.policy_execution import PolicyExecutionResult
-
 
 VLAResult = PolicyExecutionResult
 
@@ -236,9 +235,19 @@ class VLAExecutor:
 
     def _get_client(self) -> Any:
         if self._client is None:
+            from external_model_server.model_service.discovery import (
+                DiscoveryConfig,
+                ServiceDiscovery,
+            )
             from robot.vla.openpi_bridge import Pi05Client
 
-            url = str(self.config.get("server_url", "ws://localhost:8000"))
             timeout = float(self.config.get("timeout", 120.0))
-            self._client = Pi05Client(url, timeout=timeout)
+            discovery = ServiceDiscovery(
+                DiscoveryConfig(**self.config.get("discovery", {}))
+            )
+            self._client = Pi05Client(
+                timeout=timeout,
+                model_id=self.config.get("model_id"),
+                discovery=discovery,
+            )
         return self._client

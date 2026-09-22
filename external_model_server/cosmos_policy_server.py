@@ -19,7 +19,12 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from external_model_server.protocol import DynamicBatchInferenceServer
+from external_model_server.model_service.contracts import ServiceDescriptor
+from external_model_server.model_service.runtime import (
+    ModelServerRuntime,
+    add_runtime_arguments,
+    runtime_arguments,
+)
 from external_model_server.wam.batching import generate_candidates_batch
 from external_model_server.wam.t5 import (
     CosmosT5Encoder,
@@ -27,9 +32,9 @@ from external_model_server.wam.t5 import (
     validate_embedding,
 )
 from robot.wam.protocol import (
-    ProtocolError,
     REQUEST_SCHEMA,
     RESPONSE_SCHEMA,
+    ProtocolError,
     ensure_finite_latency,
     make_candidate_response,
     make_response,
@@ -405,16 +410,17 @@ class CosmosPolicyInferenceService:
         self.runtime = runtime
 
     @property
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "service": "cosmos_policy_wam",
-            "model": self.runtime.args.model_name,
-            "device": self.runtime.device,
-            "selection_location": "emerge_client",
-            "request_schema": REQUEST_SCHEMA,
-            "response_schema": RESPONSE_SCHEMA,
-            "embedding_mode": self.runtime.args.embedding_mode,
-        }
+    def descriptor(self) -> ServiceDescriptor:
+        return ServiceDescriptor("cosmos_policy_wam", self.runtime.args.model_id or self.runtime.args.model_name,
+                                 REQUEST_SCHEMA, RESPONSE_SCHEMA, ("infer", "batch"))
+
+    def load(self) -> None:
+        self.runtime.load()
+
+    def close(self) -> None:
+        self.runtime.model = None
+        self.runtime.t5_encoder = None
+        self.runtime.generated_t5_cache = None
 
     def infer(self, request: dict[str, Any]) -> dict[str, Any]:
         return self.runtime.infer(validate_request(request))
@@ -448,6 +454,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Cosmos Policy WAM websocket inference server"
     )
+    add_runtime_arguments(parser)
     parser.add_argument("--policy-checkpoint", "--ckpt-path", required=True)
     parser.add_argument("--base-model-dir", required=True)
     parser.add_argument("--dataset-stats", "--dataset-stats-path", required=True)
@@ -563,10 +570,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.parallel_timeout <= 0:
         raise SystemExit("--parallel-timeout must be positive")
     runtime = CosmosPolicyRuntime(args)
-    runtime.load()
-    DynamicBatchInferenceServer(
+    ModelServerRuntime(
         CosmosPolicyInferenceService(runtime), host=args.host, port=args.port,
         max_batch_size=args.max_batch_size, batch_wait_ms=args.batch_wait_ms,
+        **runtime_arguments(args),
     ).serve_forever()
 
 

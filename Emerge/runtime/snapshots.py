@@ -1,12 +1,10 @@
 """Read-only adapters for workspace documents and service health."""
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 _JSON_BLOCK = re.compile(r"```json\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 
@@ -91,54 +89,22 @@ def workspace_snapshot(workspace: Path) -> dict:
     return snapshot
 
 
-def _healthy_response(response) -> bool:
-    text = response.text.strip().lower()
-    if text in {"ok", "healthy", "ready"}:
-        return True
-    try:
-        payload = response.json()
-    except ValueError:
-        return False
-    return (
-        isinstance(payload, dict)
-        and (
-            payload.get("status") in {"ok", "healthy", "ready"}
-            or payload.get("ok") is True
-            or payload.get("ready") is True
-        )
-    )
-
-
 async def service_health(config) -> list[dict]:
-    """Probe explicitly configured perception endpoints."""
-    import httpx
+    """Discover self-described services on the configured local port range."""
+    from external_model_server.model_service.discovery import ServiceDiscovery
 
-    endpoints = {
-        "VGGT": config.subagents.object_location.vggt_url,
-        "SAM3": config.subagents.object_location.sam3_url,
-    }
-
-    async def probe(name, url):
-        parts = urlsplit(url)
-        health = urlunsplit((
-            "https" if parts.scheme in {"wss", "https"} else "http",
-            parts.netloc, "/healthz", "", "",
-        ))
-        started = time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
-                response = await client.get(health)
-                response.raise_for_status()
-            healthy = _healthy_response(response)
-            return {
-                "name": name, "url": health,
-                "status": "ready" if healthy else "unknown",
-                "latency_ms": round((time.monotonic() - started) * 1000),
-            }
-        except Exception as exc:
-            return {
-                "name": name, "url": health,
-                "status": "unavailable", "error": str(exc),
-            }
-
-    return list(await asyncio.gather(*(probe(name, url) for name, url in endpoints.items())))
+    result = await ServiceDiscovery(config.model_services.discovery_config()).scan()
+    rows = []
+    for item in result.services:
+        rows.append({
+            "name": item.description["service"], "url": item.endpoint,
+            "status": item.description["status"],
+            "instance_id": item.description["instance_id"],
+            "model_id": item.description["model_id"], "latency_ms": item.latency_ms,
+            "detail": item.description.get("detail", ""),
+        })
+    if result.incomplete:
+        rows.append({"name": "Scan", "status": "incomplete", "error": "Discovery deadline exceeded"})
+    if not rows:
+        rows.append({"name": "Services", "status": "not_found"})
+    return rows

@@ -15,7 +15,7 @@ from Emerge.subagents.object_location.agent import ObjectLocationSubagent
 from Emerge.subagents.object_location.register import (
     build_object_location_subagent,
 )
-
+from external_model_server.model_service.discovery import ServiceDiscovery
 
 _EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
@@ -66,6 +66,7 @@ async def run(args: argparse.Namespace) -> None:
         workspace=workspace,
         model=model,
         config=object_location_config.model_dump(),
+        discovery=ServiceDiscovery(config.model_services.discovery_config()),
     )
 
     print(

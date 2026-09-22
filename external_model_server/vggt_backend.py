@@ -30,6 +30,10 @@ class VGGTBackend:
         self._model: Any | None = None
         self._device: str | None = None
 
+    def close(self) -> None:
+        self._model = None
+        self._device = None
+
     def infer(
         self,
         views: list[VGGTViewInput],
@@ -215,7 +219,7 @@ class VGGTBackend:
             point_map_world = self._unproject_depth_to_world(
                 view_depth_m,
                 intrinsics=intrinsics_observed,
-                T_world_camera=np.asarray(view.T_world_camera, dtype=np.float64),
+                t_world_camera=np.asarray(view.T_world_camera, dtype=np.float64),
             )
             view_depth_conf = (
                 None
@@ -441,7 +445,7 @@ class VGGTBackend:
         depth_m: np.ndarray,
         *,
         intrinsics: np.ndarray,
-        T_world_camera: np.ndarray,
+        t_world_camera: np.ndarray,
     ) -> np.ndarray:
         depth_m = np.asarray(depth_m, dtype=np.float64)
         if depth_m.ndim != 2:
@@ -449,7 +453,7 @@ class VGGTBackend:
                 f"metric depth must have shape HxW, got {depth_m.shape}"
             )
         intrinsics = np.asarray(intrinsics, dtype=np.float64)
-        transform = np.asarray(T_world_camera, dtype=np.float64)
+        transform = np.asarray(t_world_camera, dtype=np.float64)
         height, width = depth_m.shape
         pixel_y, pixel_x = np.indices((height, width), dtype=np.float64)
         camera_x = (

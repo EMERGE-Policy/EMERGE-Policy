@@ -30,6 +30,7 @@ def build_agent(config):
         object_location_subagent_config=config.subagents.object_location,
         task_verification_subagent_config=config.subagents.task_verification,
         visual_monitor_config=config.visual_monitor,
+        model_services_config=config.model_services,
     )
 
 

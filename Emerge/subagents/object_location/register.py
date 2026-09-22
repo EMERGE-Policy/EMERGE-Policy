@@ -7,7 +7,6 @@ from typing import Any
 
 from Emerge.base import ToolRegistry
 from Emerge.providers.base import LLMProvider
-from Emerge.subagents.skills import SkillRegistry
 from Emerge.subagents.object_location.agent import ObjectLocationSubagent
 from Emerge.subagents.object_location.context import (
     OBJECT_LOCATION_SYSTEM_PROMPT,
@@ -20,7 +19,7 @@ from Emerge.subagents.object_location.tools import (
     ObserveSceneTool,
     SegmentCandidatesTool,
 )
-
+from Emerge.subagents.skills import SkillRegistry
 
 _OBJECT_LOCATION_DIR = Path(__file__).resolve().parent
 
@@ -31,14 +30,13 @@ def build_object_location_subagent(
     *,
     model: str | None = None,
     config: dict[str, Any] | None = None,
+    discovery=None,
 ) -> ObjectLocationSubagent:
     """Build one self-contained Object Location Subagent."""
     settings = dict(config or {})
     store = ObservationStore(workspace)
     engine = LocationEngine(
         store,
-        vggt_url=str(settings.get("vggt_url", "ws://localhost:8001")),
-        sam3_url=str(settings.get("sam3_url", "ws://localhost:8002")),
         timeout=float(settings.get("timeout", 120.0)),
         point_conf_threshold=float(
             settings.get("point_conf_threshold", 0.3)
@@ -52,6 +50,7 @@ def build_object_location_subagent(
             settings.get("ray_consensus_tolerance_m", 0.02)
         ),
         min_consistent_views=int(settings.get("min_consistent_views", 2)),
+        discovery=discovery,
     )
     observe_tool = ObserveSceneTool(store)
     candidate_tool = SegmentCandidatesTool(engine)
