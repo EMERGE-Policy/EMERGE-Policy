@@ -1,0 +1,12 @@
+[plugin]
+name = "lightnav-sonic-g1"
+version = "0.1.0"
+
+[driver]
+name = "lightnav_sonic_g1"
+module = "driver"
+class = "SonicLightNavDriver"
+profile_path = "profile_lightnav_sonic_g1.md"
+
+[python]
+sys_paths = ["."]

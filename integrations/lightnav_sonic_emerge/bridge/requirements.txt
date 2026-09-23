@@ -1,0 +1,4 @@
+# Model inference remains in the LightNav environment; these are robot-side client dependencies.
+pyzmq>=25,<28
+msgpack>=1,<2
+websockets>=12,<18

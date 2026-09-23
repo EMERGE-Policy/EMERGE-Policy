@@ -41,14 +41,31 @@ Controller, while live visual observations and simulator success signals close
 the loop, allowing the robot to perceive, decide, act, and correct itself through
 continuous interaction.*
 
+## Humanoid Navigation Integration (`humanoid-dev`)
+
+This fork adds a research integration that exposes LightNav-0 visual-language
+navigation as an EMERGE skill and executes its local waypoints through NVIDIA
+SONIC whole-body control on a Unitree G1. The integration keeps both upstream
+policy repositories unchanged and includes a deterministic, real-model
+ProcTHOR test path.
+
+- [Integration overview and reproducible quick start](integrations/lightnav_sonic_emerge/README.md)
+- [中文执行与测试终端指令](apply_docs/04_导航Skill执行与测试终端指令.md)
+- [中文实现文件与改动说明](apply_docs/05_导航Skill实现文件与改动说明.md)
+
+The LightNav-0 → SONIC simulation path has been exercised end to end. Main-Agent
+planning and real-robot deployment remain experimental and are not claimed as
+validated in this branch.
+
 ## Installation
 
 ### 1. Clone the Repository
 
 ```bash
 git clone --recurse-submodules \
-  https://github.com/EMERGE-Policy/EMERGE-Policy.git
-cd Emerge-Policy
+  --branch humanoid-dev \
+  https://github.com/hrm-666/EMERGE-Humanoid.git
+cd EMERGE-Humanoid
 
 git submodule sync --recursive
 git submodule update --init --recursive
