@@ -274,6 +274,7 @@ def _build_episode_specs(
 ) -> list[dict[str, Any]]:
     benchmark, get_libero_path = _load_benchmark_api()
     benchmark_dict = benchmark.get_benchmark_dict()
+    bddl_root = Path(get_libero_path("bddl_files")).resolve()
     task_contexts: list[dict[str, Any]] = []
     end_trial = start_trial + trials_per_task
     for suite_name in suite_names:
@@ -288,7 +289,7 @@ def _build_episode_specs(
                     f"initial states, requested trials [{start_trial}, {end_trial})"
                 )
             bddl_path = (
-                Path(get_libero_path("bddl_files"))
+                bddl_root
                 / task.problem_folder
                 / task.bddl_file
             ).resolve()
@@ -297,6 +298,7 @@ def _build_episode_specs(
                     "suite": suite_name,
                     "task_id": task_id,
                     "instruction": str(task.language),
+                    "bddl_root": str(bddl_root),
                     "bddl_file": str(bddl_path),
                     "initial_states": initial_states,
                 }
@@ -319,6 +321,7 @@ def _build_episode_specs(
                     "trial": trial,
                     "seed": seed,
                     "instruction": context["instruction"],
+                    "bddl_root": context["bddl_root"],
                     "bddl_file": context["bddl_file"],
                     "initial_state": initial_states[trial].astype(float).tolist(),
                 }
@@ -363,7 +366,11 @@ def _episode_driver_config(
     config = copy.deepcopy(base_config)
     config["workspace"] = str((episode_dir / "workspace").resolve())
     config["profile_path"] = str(profile_path)
-    config.setdefault("libero", {})["bddl_file_name"] = spec["bddl_file"]
+    bddl_root = Path(spec["bddl_root"]).resolve()
+    config.setdefault("libero", {}).update(
+        bddl_root=str(bddl_root),
+        bddl_file_name=Path(spec["bddl_file"]).resolve().relative_to(bddl_root).as_posix(),
+    )
     vla_config = config.setdefault("vla", {})
     vla_config["stop_on_success"] = True
     if policy_backend == "wam":

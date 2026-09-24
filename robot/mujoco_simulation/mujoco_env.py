@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib
 import os
-from pathlib import Path
 import re
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,8 +19,6 @@ from robot.mujoco_simulation.calibrated_observation import (
 from robot.mujoco_simulation.camera_injector import CameraInjector
 from robot.mujoco_simulation.mujoco_camera import MujocoCamera
 from robot.mujoco_simulation.pose_utils import PoseUtils
-from robot.mujoco_simulation.scene_io import NormalizedSceneConfig
-from robot.mujoco_simulation.urdf_loader import UrdfLoader
 from robot.mujoco_simulation.vggt_camera_rig import CameraPose, VggtCameraRig
 
 
@@ -154,10 +152,11 @@ class MujocoEnvManager:
         self.workspace = Path(workspace or Path.cwd()).expanduser().resolve()
 
         path_text = str(self.config.get("bddl_file_name", "")).strip()
-        self._bddl_file = Path(path_text).expanduser().resolve() if path_text else None
+        bddl_root = Path(self.config.get("bddl_root") or ".").expanduser()
+        self._bddl_file = (bddl_root / Path(path_text).expanduser()).resolve() if path_text else None
         bddl_source = self._bddl_source_file(self._bddl_file)
         if bddl_source is None or not bddl_source.is_file():
-            detail = path_text or "<empty>"
+            detail = str(self._bddl_file) if self._bddl_file else "<empty>"
             if bddl_source is not None and bddl_source != self._bddl_file:
                 detail += f" (LIBERO-Plus base file: {bddl_source})"
             raise FileNotFoundError(f"LIBERO BDDL file not found: {detail}")
@@ -216,7 +215,6 @@ class MujocoEnvManager:
         self._latest_info: dict[str, Any] = {}
         self._cameras: dict[str, MujocoCamera] = {}
         self._observation_writer: CalibratedObservationWriter | None = None
-        self._scene: NormalizedSceneConfig | None = None
         self._merged_xml: str | None = None
         self._auto_camera_poses: dict[str, CameraPose] = {}
         self._connected = False
@@ -256,9 +254,8 @@ class MujocoEnvManager:
     def cameras(self) -> dict[str, MujocoCamera]:
         return dict(self._cameras)
 
-    def create(self, scene: NormalizedSceneConfig) -> None:
+    def create(self) -> None:
         self.close()
-        self._scene = scene
         os.environ.setdefault("MUJOCO_GL", str(self.config.get("mujoco_gl", "egl")))
         os.environ.setdefault("MPLCONFIGDIR", "/tmp/phyagentos-matplotlib")
         if bool(self.config.get("disable_numba_jit", True)):
@@ -287,7 +284,7 @@ class MujocoEnvManager:
         )
         self._environment = offscreen_env(**env_kwargs)
         self._latest_obs = dict(self._environment.reset())
-        self._install_runtime_model(scene)
+        self._install_runtime_model()
         self._create_cameras(list(self._camera_configs))
         self._connected = True
 
@@ -453,30 +450,20 @@ class MujocoEnvManager:
             )
             self._observation_writer.write()
 
-    def _install_runtime_model(self, scene: NormalizedSceneConfig) -> None:
+    def _install_runtime_model(self) -> None:
         if self._environment is None:
             raise RuntimeError("LIBERO environment has not been created")
-        raw_env = self._environment.env
-        base_xml = raw_env.model.get_xml()
-        runtime_xml = base_xml
-        changed = False
-
-        if scene.external_assets:
-            runtime_xml = UrdfLoader().merge_assets(runtime_xml, scene.external_assets)
-            changed = True
-
         injected_cameras = [
             item
             for item in self._camera_configs.values()
             if item["mode"] in {"fixed", "auto"}
         ]
-        if injected_cameras:
-            runtime_xml = CameraInjector().merge_cameras(runtime_xml, injected_cameras)
-            changed = True
-
-        self._merged_xml = runtime_xml if changed else None
-        if not changed:
+        self._merged_xml = None
+        if not injected_cameras:
             return
+        base_xml = self._environment.env.model.get_xml()
+        runtime_xml = CameraInjector().merge_cameras(base_xml, injected_cameras)
+        self._merged_xml = runtime_xml
         self._reload_runtime_model_preserving_state(runtime_xml)
 
     def _reload_runtime_model_preserving_state(

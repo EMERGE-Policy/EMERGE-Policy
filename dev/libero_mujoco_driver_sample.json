@@ -1,7 +1,8 @@
 {
   "workspace": "~/.Emerge/workspace",
   "libero": {
-    "bddl_file_name": "third_party/openpi/third_party/libero/libero/libero/bddl_files/libero_object/pick_up_the_cream_cheese_and_place_it_in_the_basket.bddl",
+    "bddl_root": "third_party/openpi/third_party/libero/libero/libero/bddl_files",
+    "bddl_file_name": "libero_object/pick_up_the_cream_cheese_and_place_it_in_the_basket.bddl",
     "libero_source_path": "third_party/openpi/third_party/libero",
     "mujoco_gl": "egl",
     "disable_numba_jit": true,

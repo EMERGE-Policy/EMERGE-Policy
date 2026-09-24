@@ -20,7 +20,6 @@ from Emerge.agent.tools.delegate import DelegateSubagentTool
 from Emerge.agent.tools.embodied import EmbodiedActionTool
 from Emerge.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from Emerge.agent.tools.message import MessageTool
-from Emerge.agent.tools.scene_graph import SceneGraphQueryTool
 from Emerge.agent.tools.shell import ExecTool
 from Emerge.agent.tools.update_plan import UpdatePlanTool
 from Emerge.agent.visual_monitor import (
@@ -200,7 +199,6 @@ class AgentLoop:
             ),
         )
         self.tools.register(action_tool)
-        self.tools.register(SceneGraphQueryTool(workspace=self.workspace))
 
     def _emit(self, kind: str, data: dict) -> None:
         if self.on_event is not None:

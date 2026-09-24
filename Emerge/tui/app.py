@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import time
 from collections import deque
 from uuid import uuid4
@@ -30,14 +31,26 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from Emerge.runtime.configuration import load_runtime_config
+from Emerge.runtime.controller_control import (
+    control_lock,
+    expired,
+    new_reset_request,
+    new_scene_request,
+    read_json,
+    result_file,
+    update_request,
+    write_request,
+    write_result,
+)
 from Emerge.runtime.protocol import RunRequest
 from Emerge.runtime.service import AgentRuntime
 from Emerge.runtime.snapshots import service_health, workspace_snapshot
-from Emerge.runtime.storage import atomic_json
+from Emerge.runtime.storage import WorkspaceLease, atomic_json
 from Emerge.runtime.workspace import reset_workspace_context
 from Emerge.session.manager import SessionManager
 from Emerge.tui.state import ViewState
 from Emerge.tui.theme import style
+from Emerge.utils.action_queue import cancel_actions
 
 BRAND = (
     "█▀▀ █▄█ █▀▀ █▀█ █▀▀ █▀▀  █▀█ █▀█ █   █ █▀▀ █ █",
@@ -47,6 +60,8 @@ BRAND = (
 
 COMMANDS = [
     ("/new", "Clear workspace and start a new session"),
+    ("/reset", "Stop execution and reload the controller environment"),
+    ("/scene", "Browse the driver's scenes"),
     ("/sessions", "Search and resume sessions"),
     ("/model", "Set model for the next run"),
     ("/stop", "Stop the current run"),
@@ -83,6 +98,10 @@ class TranscriptLexer(Lexer):
 
 class WorkspaceApp:
     SNAPSHOT_INTERVAL_S = 0.5
+    RESET_STOP_TIMEOUT_S = 15.0
+    RESET_CANCEL_TIMEOUT_S = 10.0
+    RESET_WAIT_NOTICE_S = 120.0
+    RESET_POLL_INTERVAL_S = 0.25
     SIDEBAR_WIDTH = 44
 
     def __init__(self, *, config=None, workspace=None, session_id=None, model=None, runtime=None):
@@ -99,6 +118,10 @@ class WorkspaceApp:
         self.runtime = runtime or AgentRuntime()
         self.cancel = None
         self.task = None
+        self.reset_task = None
+        self.scene_task = None
+        self.scene_status = {}
+        self.last_run_result = None
         self.closing = False
         self.details = False
         self.logs = deque(maxlen=300)
@@ -121,6 +144,7 @@ class WorkspaceApp:
         self.palette_open = False
         self.palette_entries = []
         self.palette_index = 0
+        self.palette_directory = None
 
         self.transcript = TextArea(
             read_only=True, scrollbar=True, wrap_lines=True, lexer=TranscriptLexer(),
@@ -133,7 +157,10 @@ class WorkspaceApp:
         palette = Frame(HSplit([
             self.palette_input,
             Window(FormattedTextControl(self._palette_text), height=14),
-        ]), title="Slash commands")
+        ]), title=lambda: (
+            f"Scenes · {self.palette_directory or self.scene_status.get('root', '')}"
+            if self.palette_directory is not None else "Slash commands"
+        ))
         self.side = Window(
             FormattedTextControl(lambda: self.sidebar_fragments),
             width=self.SIDEBAR_WIDTH, wrap_lines=True, always_hide_cursor=True,
@@ -176,7 +203,18 @@ class WorkspaceApp:
 
     @property
     def busy(self):
-        return self.task is not None and not self.task.done()
+        return (
+            (self.task is not None and not self.task.done())
+            or self.changing_environment
+        )
+
+    @property
+    def resetting(self):
+        return self.reset_task is not None and not self.reset_task.done()
+
+    @property
+    def changing_environment(self):
+        return self.resetting or (self.scene_task is not None and not self.scene_task.done())
 
     def _header(self):
         columns = self.application.output.get_size().columns
@@ -230,7 +268,13 @@ class WorkspaceApp:
                 self.editor.text = ""
                 self.command(message)
             elif self.busy:
-                self.state.note("Run in progress. Draft kept; use /stop before sending.")
+                self.state.note(
+                    "Environment change in progress. Draft kept; waiting for the controller."
+                    if self.changing_environment else "Run in progress. Draft kept; use /stop before sending."
+                )
+                self.refresh()
+            elif self.scene_status and not self.scene_status["ready"]:
+                self.state.note("Environment is not ready. Use /scene or /reset to load it. Draft kept.")
                 self.refresh()
             else:
                 self.editor.text = ""
@@ -271,6 +315,9 @@ class WorkspaceApp:
         def control_c(event):
             if self.palette_open:
                 self.close_palette()
+            elif self.changing_environment:
+                self.state.note("Environment change in progress; waiting for the controller result before exiting.")
+                self.refresh()
             elif not self.busy:
                 self.application.exit()
             elif self.cancel and self.cancel.is_set():
@@ -295,20 +342,22 @@ class WorkspaceApp:
     def _palette_text(self):
         choices = self._choices()
         if not choices:
-            return " No matching command"
+            return " No matching scene" if self.palette_directory is not None else " No matching command"
         selected = self.palette_index % len(choices)
         start = max(0, selected - 11)
         return [
             (
                 "class:selected" if index == selected else "class:palette",
-                f" {'›' if index == selected else ' '} {command:<16} {title}\n",
+                f" {'›' if index == selected else ' '} "
+                + (title if self.palette_directory is not None else f"{command:<16} {title}") + "\n",
             )
             for index, (command, title) in enumerate(
                 choices[start:start + 14], start,
             )
         ]
 
-    def open_palette(self, entries, query=""):
+    def open_palette(self, entries, query="", *, directory=None):
+        self.palette_directory = directory
         self.palette_entries = entries
         self.palette_index = 0
         self.palette_open = True
@@ -323,13 +372,17 @@ class WorkspaceApp:
         self.application.invalidate()
 
     def stop(self):
+        if self.changing_environment:
+            return
         if self.cancel:
             self.cancel.set()
             self.state.status = "cancelling · awaiting controller"
             self.refresh()
 
     def quit(self):
-        if self.busy:
+        if self.changing_environment:
+            self.state.note("Environment change in progress; waiting for the controller result before exiting.")
+        elif self.busy:
             self.closing = True
             self.stop()
         else:
@@ -337,7 +390,64 @@ class WorkspaceApp:
 
     def command(self, text):
         command, _, arg = text.partition(" ")
-        if command in {"/new", "/resume", "/model"} and self.busy:
+        if self.changing_environment:
+            self.state.note("Environment change is in progress; wait for the controller result.")
+        elif command == "/reset":
+            self.closing = False
+            if self.cancel is not None:
+                self.cancel.set()
+            self.state.status = "resetting"
+            self.state.note("Stopping the current run and requesting an environment reset...")
+            self.reset_task = self.application.create_background_task(
+                self.reset_environment(self.task if self.task and not self.task.done() else None),
+            )
+        elif command in {"/scene", "/scene-dir"}:
+            try:
+                scene = read_json(self.workspace / ".controller/scene.json")
+                if scene is None:
+                    raise ValueError("Start the controller to select a scene.")
+                os.kill(scene["pid"], 0)
+                self.scene_status = scene
+                if not scene["entries"]:
+                    raise ValueError("This driver has no selectable scenes.")
+                if command == "/scene-dir" or not arg:
+                    directory = arg if command == "/scene-dir" else ""
+                    prefix = directory + "/" if directory else ""
+                    choices = {}
+                    for entry in scene["entries"]:
+                        if not entry["label"].startswith(prefix):
+                            continue
+                        name, separator, _ = entry["label"][len(prefix):].partition("/")
+                        if separator:
+                            choices["/scene-dir " + prefix + name] = name + "/"
+                        else:
+                            choices["/scene " + entry["id"]] = name + (
+                                " [current]" if entry["id"] == scene["current"] else ""
+                            )
+                    entries = sorted(choices.items(), key=lambda item: (not item[1].endswith("/"), item[1]))
+                    if directory:
+                        entries.insert(0, ("/scene-dir " + directory.rpartition("/")[0], "../"))
+                    if not entries:
+                        raise ValueError("No scenes in this folder.")
+                    self.open_palette(entries, directory=directory)
+                else:
+                    selected = next((entry for entry in scene["entries"] if entry["id"] == arg), None)
+                    if selected is None:
+                        raise ValueError("Select a scene from the driver's catalog.")
+                    if scene["ready"] and arg == scene["current"]:
+                        self.state.note("This scene is already loaded.")
+                    else:
+                        self.closing = False
+                        if self.cancel is not None:
+                            self.cancel.set()
+                        self.state.status = "switching scene"
+                        self.state.note(f"Stopping the current task and loading {selected['label']}...")
+                        self.scene_task = self.application.create_background_task(
+                            self.switch_scene(selected, self.task if self.task and not self.task.done() else None),
+                        )
+            except (OSError, ValueError) as exc:
+                self.state.note(f"Cannot select scene: {exc}")
+        elif command in {"/new", "/resume", "/model"} and self.busy:
             self.state.note("Finish or stop this run before changing session/model.")
         elif command == "/new":
             reset_workspace_context(self.workspace)
@@ -431,6 +541,7 @@ class WorkspaceApp:
 
     async def run_turn(self, message):
         self.cancel = self.cancel or asyncio.Event()
+        self.last_run_result = None
         request = RunRequest(
             message=message,
             session_id=self.state.session_id,
@@ -445,7 +556,8 @@ class WorkspaceApp:
                 request, output_dir=self.last_output,
                 on_event=self.on_event, cancel=self.cancel,
             )
-            if self.closing and result.finish_reason != "cancellation_unconfirmed":
+            self.last_run_result = result
+            if self.closing and not self.changing_environment and result.finish_reason != "cancellation_unconfirmed":
                 self.application.exit()
             elif self.closing:
                 self.closing = False
@@ -458,6 +570,195 @@ class WorkspaceApp:
             self.closing = False
         finally:
             self.cancel = None
+            self.dirty = True
+            self.refresh(force_snapshot=True)
+
+    async def reset_environment(self, current_task=None):
+        try:
+            if current_task is not None:
+                if self.cancel is not None:
+                    self.cancel.set()
+                done, _ = await asyncio.wait({current_task}, timeout=self.RESET_STOP_TIMEOUT_S)
+                if not done:
+                    self.state.status = "failed"
+                    self.state.note("Reset aborted: Agent stop timed out; workspace was not cleared.")
+                    return
+                result = self.last_run_result
+                if result is None or result.finish_reason in {"cancellation_unconfirmed", "cleanup_error"}:
+                    self.state.status = "failed"
+                    self.state.note(
+                        "Reset cancelled: the current robot action was not confirmed stopped."
+                    )
+                    return
+
+            # Retain ownership through the handshake, including uncertain results.
+            with WorkspaceLease(self.workspace):
+                cancellation = await cancel_actions(
+                    self.workspace / "ACTION.md", "workspace reset", self.RESET_CANCEL_TIMEOUT_S,
+                )
+                if not cancellation["acknowledged"]:
+                    self.state.status = "failed"
+                    self.state.note("Reset aborted: queued actions did not confirm stopping; workspace was not cleared.")
+                    return
+                request = new_reset_request()
+                request_id = request["request_id"]
+                write_request(self.workspace, request)
+                self.state.status = "resetting · awaiting controller"
+                deadline = time.monotonic() + self.RESET_WAIT_NOTICE_S
+                cleanup_attempted = False
+                cleaned = False
+                uncertain = False
+
+                while True:
+                    try:
+                        # Expiry and claiming use the same lock, so a late claim
+                        # cannot start after the UI has declared the request expired.
+                        with control_lock(self.workspace):
+                            result = read_json(result_file(self.workspace, request_id))
+                            if result is None and expired(request):
+                                result = write_result(self.workspace, request_id, "expired")
+                    except (OSError, ValueError) as exc:
+                        result = None
+                        if not uncertain:
+                            self.state.note(f"Reset result not yet confirmed: {exc}. Continuing to check {request_id}.")
+                            uncertain = True
+                    status = result["status"] if result else None
+                    if status == "succeeded":
+                        self.state.status = "ready"
+                        self.state.note("Environment reset complete. Ready for a new task.")
+                        return
+                    if status in {"failed", "expired"}:
+                        self.state.status = "failed"
+                        detail = result.get("error", {}).get("message", "Controller did not accept the request.")
+                        prefix = "Workspace cleared, but environment loading failed" if cleaned else "Reset failed"
+                        self.state.note(f"{prefix}: {detail}")
+                        return
+                    if status == "can_clean" and not cleanup_attempted:
+                        cleanup_attempted = True
+                        try:
+                            reset_workspace_context(self.workspace)
+                        except Exception as exc:
+                            self.state.note(f"Workspace cleanup failed (some files may already be cleared): {exc}")
+                            phase = "cleanup_failed"
+                            error = {"code": "cleanup_failed", "message": str(exc)}
+                        else:
+                            cleaned = True
+                            self.state = ViewState("cli:" + uuid4().hex, self.state.model)
+                            uncertain = False
+                            self.state.status = "resetting · loading environment"
+                            self.logs.clear()
+                            self.show_logs = False
+                            self.last_output = None
+                            self.last_run_result = None
+                            self.snapshot = None
+                            self.snapshot_time = 0.0
+                            self._entry_cache.clear()
+                            self.state.note("Workspace cleared; waiting for the new environment...")
+                            self.refresh(force_snapshot=True)
+                            phase, error = "cleanup_completed", None
+                        try:
+                            update_request(self.workspace, request_id, phase, error)
+                        except OSError as exc:
+                            self.state.note(f"Could not notify controller of cleanup: {exc}. Waiting for its result.")
+                        deadline = time.monotonic() + self.RESET_WAIT_NOTICE_S
+                    if time.monotonic() >= deadline and not uncertain:
+                        self.state.status = "resetting · result unconfirmed"
+                        self.state.note(f"Reset result not yet confirmed; continuing to check request {request_id}.")
+                        uncertain = True
+                    self.dirty = True
+                    await asyncio.sleep(self.RESET_POLL_INTERVAL_S)
+        except Exception as exc:
+            self.state.status = "failed"
+            self.state.note(f"Reset failed: {exc}")
+        finally:
+            if self.task is not None and self.task.done():
+                self.task = None
+            self.reset_task = None
+            self.dirty = True
+            self.refresh(force_snapshot=True)
+
+    async def switch_scene(self, selected, current_task=None):
+        try:
+            if current_task is not None:
+                if self.cancel is not None:
+                    self.cancel.set()
+                done, _ = await asyncio.wait({current_task}, timeout=self.RESET_STOP_TIMEOUT_S)
+                if not done:
+                    raise RuntimeError("Agent stop timed out; scene and workspace were not changed.")
+                result = self.last_run_result
+                if result is None or result.finish_reason in {"cancellation_unconfirmed", "cleanup_error"}:
+                    raise RuntimeError("Robot action stop was not confirmed; scene was not changed.")
+
+            with WorkspaceLease(self.workspace):
+                cancellation = await cancel_actions(
+                    self.workspace / "ACTION.md", "scene switch", self.RESET_CANCEL_TIMEOUT_S,
+                )
+                if not cancellation["acknowledged"]:
+                    raise RuntimeError("Queued actions did not confirm stopping; workspace was not cleared.")
+                request = new_scene_request(selected["id"])
+                request_id = request["request_id"]
+                write_request(self.workspace, request)
+                self.state.status = "switching scene · awaiting controller"
+                cleanup_attempted = False
+                uncertain = False
+                deadline = time.monotonic() + self.RESET_WAIT_NOTICE_S
+                while True:
+                    try:
+                        with control_lock(self.workspace):
+                            result = read_json(result_file(self.workspace, request_id))
+                            if result is None and expired(request):
+                                result = write_result(self.workspace, request_id, "expired")
+                    except (OSError, ValueError) as exc:
+                        result = None
+                        if not uncertain:
+                            self.state.note(f"Scene result unconfirmed: {exc}. Continuing to check {request_id}.")
+                            uncertain = True
+                    status = result["status"] if result else None
+                    if status == "succeeded":
+                        self.state.status = "ready"
+                        self.state.note(f"Scene loaded: {selected['label']}. Ready for a new task.")
+                        return
+                    if status in {"failed", "expired"}:
+                        detail = result.get("error", {}).get("message", "Controller did not accept the request.")
+                        raise RuntimeError(detail)
+                    if status == "can_clean" and not cleanup_attempted:
+                        cleanup_attempted = True
+                        try:
+                            reset_workspace_context(self.workspace)
+                        except Exception as exc:
+                            phase, error = "cleanup_failed", {"code": "cleanup_failed", "message": str(exc)}
+                            self.state.note(f"Workspace cleanup failed: {exc}")
+                        else:
+                            self.state = ViewState("cli:" + uuid4().hex, self.state.model)
+                            self.state.status = "switching scene · loading environment"
+                            self.logs.clear()
+                            self.show_logs = False
+                            self.last_output = None
+                            self.last_run_result = None
+                            self.snapshot = None
+                            self.snapshot_time = 0.0
+                            self._entry_cache.clear()
+                            self.state.note(f"Workspace cleared; loading {selected['label']}...")
+                            self.refresh(force_snapshot=True)
+                            phase, error = "cleanup_completed", None
+                        try:
+                            update_request(self.workspace, request_id, phase, error)
+                        except OSError as exc:
+                            self.state.note(f"Could not confirm cleanup: {exc}. Waiting for controller result.")
+                        deadline = time.monotonic() + self.RESET_WAIT_NOTICE_S
+                    if time.monotonic() >= deadline and not uncertain:
+                        self.state.status = "switching scene · result unconfirmed"
+                        self.state.note(f"Scene result unconfirmed; continuing to check {request_id}.")
+                        uncertain = True
+                    self.dirty = True
+                    await asyncio.sleep(self.RESET_POLL_INTERVAL_S)
+        except Exception as exc:
+            self.state.status = "failed"
+            self.state.note(f"Scene switch failed: {exc}. Use /scene to try again.")
+        finally:
+            if self.task is not None and self.task.done():
+                self.task = None
+            self.scene_task = None
             self.dirty = True
             self.refresh(force_snapshot=True)
 
@@ -561,6 +862,13 @@ class WorkspaceApp:
 
         section("SESSION", "sidebar.section.session")
         row(("sidebar.value", self.state.session_id))
+
+        if self.scene_status.get("root"):
+            section("SCENE · /scene", "sidebar.section.robot")
+            current = self.scene_status.get("current")
+            label = next((entry["label"] for entry in self.scene_status["entries"]
+                          if entry["id"] == current), current)
+            row(("sidebar.value", label if current else "Environment not ready"))
 
         section("PLAN", "sidebar.section.plan")
         plan = snapshot["plan"]
@@ -699,6 +1007,12 @@ class WorkspaceApp:
             or now - self.snapshot_time >= self.SNAPSHOT_INTERVAL_S
         ):
             self.snapshot = workspace_snapshot(self.workspace)
+            try:
+                self.scene_status = read_json(self.workspace / ".controller/scene.json") or {}
+                if self.scene_status:
+                    os.kill(self.scene_status["pid"], 0)
+            except (OSError, ValueError):
+                self.scene_status = {}
             self.snapshot_time = now
         self.sidebar_fragments = self._build_sidebar(self.snapshot)
         self.dirty = False

@@ -37,6 +37,12 @@ Tsinghua University · Nanjing University of Science and Technology · Xi'an Jia
 
 ##  What's New
 
+-  **[September 24, 2026]** EMERGE-Policy now supports environment reset and scene
+  switching directly from the TUI! Use `/reset` to reload the environment or
+  `/scene` to browse and select a new scene. A unified driver lifecycle interface
+  brings reset and scene selection to new environment integrations, with updated
+  BDDL configuration and LIBERO evaluation support.
+
 -  **[September 16, 2026]** We release the WAM version of EMERGE-Policy! This new
   version integrates Cosmos Policy WAM alongside the original OpenPI VLA version,
   with isolated model servers, multi-worker batched inference, and evaluation on
@@ -201,6 +207,16 @@ Run the agent CLI in another terminal:
 ```bash
 emerge
 ```
+
+To reload the current environment, enter `/reset` in Emerge. It stops the current
+task, clears the task workspace, starts a new session, and asks the running
+controller to recreate its driver using the original configuration file. Both
+terminals remain running. See the [reset guide](Emerge/README.md#reload-the-environment-with-reset)
+for cleanup scope and failure behavior.
+
+New robot drivers must implement the lifecycle contract in
+[robot/DRIVER_INTERFACE.md](robot/DRIVER_INTERFACE.md), including reset and
+scene selection.
 
 Choose one policy backend and start it together with the shared VGGT and SAM3
 perception services. The launcher, standard LIBERO evaluation, and LIBERO-Plus

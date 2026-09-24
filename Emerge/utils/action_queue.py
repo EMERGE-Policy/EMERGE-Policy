@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
-import uuid
 import os
 import tempfile
-from pathlib import Path
+import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
-
 
 _FENCE_OPEN = "```json"
 _FENCE_CLOSE = "```"
@@ -139,6 +140,44 @@ def pending_action_type(document: dict[str, Any]) -> str | None:
         return None
     _, item = pending
     return str(item.get("action_type") or "unknown")
+
+
+async def cancel_actions(
+    path: Path, reason: str, timeout: float, action_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Cancel selected actions, or every unfinished workspace action for reset."""
+    def read_actions():
+        if not path.exists() or not (content := path.read_text(encoding="utf-8").strip()):
+            return []
+        payload = parse_action_markdown(content)
+        document = normalize_action_document(payload) if payload is not None else None
+        if document is None:
+            raise ValueError("ACTION.md contains invalid action data")
+        return document["actions"]
+
+    actions = read_actions()
+    terminal = {"completed", "failed", "cancelled"}
+    ids = action_ids if action_ids is not None else [
+        a["id"] for a in actions if a["status"] not in terminal
+    ]
+    states = {a["id"]: a["status"] for a in actions}
+    unfinished = [i for i in ids if states.get(i) not in terminal]
+    if unfinished:
+        def mark(document):
+            for action in document["actions"]:
+                if action["id"] in unfinished and action["status"] not in terminal:
+                    action.update(cancel_requested=True, cancel_reason=reason,
+                                  cancel_requested_at=action_timestamp())
+        update_action_document(path, mark)
+    deadline = time.monotonic() + timeout
+    while True:
+        states = {a["id"]: a["status"] for a in read_actions()}
+        confirmed = all(states.get(i) in terminal for i in ids)
+        if confirmed or time.monotonic() >= deadline:
+            return {"acknowledged": confirmed, "action_ids": ids,
+                    "requested_action_ids": unfinished,
+                    "states": {i: states.get(i, "unknown") for i in ids}}
+        await asyncio.sleep(0.1)
 
 
 def append_action(document: dict[str, Any], *, action_type: str, parameters: dict[str, Any]) -> dict[str, Any]:

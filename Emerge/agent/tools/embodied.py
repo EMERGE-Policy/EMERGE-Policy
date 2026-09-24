@@ -17,13 +17,14 @@ except ImportError:  # pragma: no cover - fallback for lightweight test envs
 
 from Emerge.base import Tool
 from Emerge.utils.action_queue import (
+    action_timestamp,
     append_action,
+    cancel_actions,
     empty_action_document,
     normalize_action_document,
     parse_action_markdown,
     pending_action_type,
     update_action_document,
-    action_timestamp,
 )
 
 if TYPE_CHECKING:
@@ -362,26 +363,9 @@ class EmbodiedActionTool(Tool):
         update_action_document(action_file, mark)
 
     async def cancel_active(self, reason: str, timeout: float) -> dict:
-        ids = sorted(self.active_action_ids)
-        if not ids:
-            return {"acknowledged": True, "action_ids": []}
-        action_file = self.workspace / "ACTION.md"
-        document = self._load_action_document(action_file)
-        states = {str(a["id"]): a.get("status") for a in (document or {}).get("actions", [])}
-        unfinished = [i for i in ids if states.get(i) not in {"completed", "failed", "cancelled"}]
-        if not unfinished:
-            return {"acknowledged": True, "action_ids": ids, "requested_action_ids": [], "states": states}
-        for action_id in unfinished:
-            self._request_action_cancel(action_file, action_id, reason=reason)
-        deadline = time.monotonic() + timeout
-        while True:
-            document = self._load_action_document(action_file)
-            states = {str(a["id"]): a.get("status") for a in (document or {}).get("actions", [])}
-            confirmed = all(states.get(i) in {"completed", "failed", "cancelled"} for i in ids)
-            if confirmed or time.monotonic() >= deadline:
-                return {"acknowledged": confirmed, "action_ids": ids, "requested_action_ids": unfinished,
-                        "states": {i: states.get(i, "unknown") for i in ids}}
-            await asyncio.sleep(0.1)
+        return await cancel_actions(
+            self.workspace / "ACTION.md", reason, timeout, sorted(self.active_action_ids),
+        )
 
     @staticmethod
     def _load_action_document(action_file: Path) -> dict[str, Any] | None:

@@ -6,7 +6,9 @@ import http
 import json
 import logging
 import math
+import os
 import signal
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -89,7 +91,10 @@ class ModelServerRuntime:
         if self._stop.is_set():
             return
         self.status, self.detail = "ready", ""
-        logger.info("service=%s instance=%s READY ws://%s:%s", self.descriptor.service, self.instance_id, self.host, self.port)
+        message = "✓ service=%s instance=%s READY ws://%s:%s"
+        if sys.stderr.isatty() and "NO_COLOR" not in os.environ:
+            message = "\033[1;32m" + message + "\033[0m"
+        logger.info(message, self.descriptor.service, self.instance_id, self.host, self.port)
         if self.remote:
             while not self._stop.is_set():
                 await asyncio.sleep(self.health_interval)

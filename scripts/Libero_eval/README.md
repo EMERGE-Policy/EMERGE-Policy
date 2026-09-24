@@ -2,6 +2,13 @@
 
 Run all commands from the repository root.
 
+Episode driver configs use `libero.bddl_root` plus a relative
+`libero.bddl_file_name`. The evaluator fills both from the selected benchmark
+task, so the base evaluation JSON does not need a fixed scene. LIBERO-Plus and
+LIBERO-Pro share this config writer; Plus virtual filenames retain their
+parameter suffixes, and Pro resolves each suite's actual data root, including
+generated Environment data exposed through symlinks.
+
 ## 1. Start services (terminal 1)
 
 ### WAM (default)

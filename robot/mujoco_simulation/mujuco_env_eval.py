@@ -67,8 +67,8 @@ class MujocoEvalEnvManager(MujocoEnvManager):
         self._evaluation_metadata = dict(metadata) if isinstance(metadata, dict) else {}
         self._reset_evaluation_counters()
 
-    def create(self, scene) -> None:
-        super().create(scene)
+    def create(self) -> None:
+        super().create()
         self._reset_from_official_state()
 
     def reset(self) -> dict[str, Any]:

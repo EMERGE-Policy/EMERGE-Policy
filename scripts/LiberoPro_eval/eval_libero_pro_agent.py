@@ -528,6 +528,7 @@ def _build_episode_specs(
 ) -> list[dict[str, Any]]:
     """Build trial-, dimension-, and suite-balanced LIBERO-Pro episode specs."""
     end_trial = start_trial + trials_per_task
+    bddl_root = (data_path / "bddl_files").resolve()
     contexts_by_dimension: dict[str, list[dict[str, Any]]] = {}
     for dimension in dimensions:
         contexts_by_suite: dict[str, list[dict[str, Any]]] = {}
@@ -538,7 +539,7 @@ def _build_episode_specs(
             for task_id in selected_task_ids[dimension][base_suite]:
                 task = suite.get_task(task_id)
                 bddl_path = (
-                    data_path / "bddl_files" / suite_name / task.bddl_file
+                    bddl_root / suite_name / task.bddl_file
                 ).resolve()
                 init_path = (
                     data_path / "init_files" / suite_name / task.init_states_file
@@ -584,6 +585,8 @@ def _build_episode_specs(
                         "task_name": str(task.name),
                         "filename_instruction": filename_instruction,
                         "instruction": instruction,
+                        # Environment overlays link suites from different data roots.
+                        "bddl_root": str((bddl_root / suite_name).resolve().parent),
                         "bddl_file": str(bddl_path),
                         "initial_states": initial_states,
                     }
