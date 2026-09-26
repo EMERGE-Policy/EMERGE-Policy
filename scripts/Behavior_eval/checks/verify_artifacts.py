@@ -7,7 +7,7 @@ evidence: an episode can end cleanly and still not have turned the radio on.
 
 Usage::
 
-    python -m integrations.behavior_b1k_pi05.checks.verify_artifacts \
+    python -m scripts.Behavior_eval.checks.verify_artifacts \
         --output-dir <episode output dir> --require-success
 """
 
@@ -24,7 +24,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 try:
-    from integrations.behavior_b1k_pi05 import contracts
+    from robot.behavior import contracts
 except ImportError:  # Direct script execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import contracts  # type: ignore[no-redef]

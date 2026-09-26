@@ -1,11 +1,4 @@
-"""Process, port and workspace helpers shared by the BEHAVIOR runners.
-
-The three runners used to duplicate supervision code, and the duplication hid
-two real defects: ``_stop`` returned without signalling when the process-group
-leader had already exited, and the health check could not tell this run's
-service apart from a service that was already listening.  Both are fixed here
-once.
-"""
+"""Process, port, and workspace helpers for native BEHAVIOR evaluation."""
 
 from __future__ import annotations
 
@@ -22,12 +15,12 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 from urllib import request as urllib_request
 
-PLUGIN_ROOT = Path(__file__).resolve().parent
-EMERGE_ROOT = PLUGIN_ROOT.parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+EMERGE_ROOT = SCRIPT_DIR.parents[1]
 WORKSPACE_ROOT = EMERGE_ROOT.parent
 
 SKILL_NAME = "vla"
-SKILL_SOURCE = PLUGIN_ROOT / "workspace_skill" / "SKILL.md"
+SKILL_SOURCE = SCRIPT_DIR / "workspace_skill" / "SKILL.md"
 
 
 # --------------------------------------------------------------------------- #

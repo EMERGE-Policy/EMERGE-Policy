@@ -161,3 +161,4 @@ For additional startup options and health-check endpoints, see
 - [Standard LIBERO Evaluation](scripts/Libero_eval/README.md)
 - [LIBERO-Plus Robustness Evaluation](scripts/LiberoPlus_eval/README.md)
 - [LIBERO-Pro Evaluation](scripts/LiberoPro_eval/README.md)
+- [BEHAVIOR-1K Evaluation](scripts/Behavior_eval/README.md)

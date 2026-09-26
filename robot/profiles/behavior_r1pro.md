@@ -5,7 +5,7 @@
 - **Robot:** R1Pro humanoid in OmniGibson
 - **Task:** `turning_on_radio`
 - **VLA:** official BEHAVIOR π0.5 checkpoint
-- **Driver:** `behavior_b1k_pi05`
+- **Driver:** `behavior_r1pro`
 - **Mode:** `controlled_pi05_gateway`
 
 ## Supported Action

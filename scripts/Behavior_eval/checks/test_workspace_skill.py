@@ -14,8 +14,8 @@ from pathlib import Path
 
 from Emerge.agent.context import ContextBuilder
 from Emerge.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
-from integrations.behavior_b1k_pi05.contracts import OFFICIAL_PROMPT
-from integrations.behavior_b1k_pi05.runner_common import install_workspace_skill
+from robot.behavior.contracts import OFFICIAL_PROMPT
+from scripts.Behavior_eval.runner_common import install_workspace_skill
 
 BUILTIN_VLA = BUILTIN_SKILLS_DIR / "vla" / "SKILL.md"
 

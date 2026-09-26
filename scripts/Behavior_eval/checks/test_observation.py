@@ -11,7 +11,7 @@ import msgpack
 import numpy as np
 from PIL import Image
 
-from integrations.behavior_b1k_pi05.observation import ObservationPublisher
+from robot.behavior.observation import ObservationPublisher
 
 
 def _pack_array(value):

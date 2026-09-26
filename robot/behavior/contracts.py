@@ -1,12 +1,11 @@
-"""Shared contracts for the BEHAVIOR-1K ``turning_on_radio`` integration.
+"""Contracts for the first native BEHAVIOR-1K evaluation path.
 
 Everything in this module is standard library only.  It is imported by the
-controller driver, by all three runners and by the checks, which run in three
-different Python environments, so it must never pull in numpy, PIL, msgpack or
-websockets.
+controller driver, the evaluation runner, and the offline checks, so it must
+never pull in numpy, PIL, msgpack, or websockets.
 
 The module owns three kinds of truth that used to be duplicated across the
-integration:
+evaluation path:
 
 * the frozen instruction of the single-task π0.5 checkpoint,
 * the shape rules for ``vla_execute`` parameters and for the driver

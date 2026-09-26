@@ -21,14 +21,14 @@ from typing import Any
 import msgpack
 import numpy as np
 
-from integrations.behavior_b1k_pi05.checks.test_driver import _FakeGateway
-from integrations.behavior_b1k_pi05.contracts import OFFICIAL_PROMPT, TASK_NAME
-from integrations.behavior_b1k_pi05.driver import BehaviorB1KPi05Driver
-from integrations.behavior_b1k_pi05.runner_common import (
+from scripts.Behavior_eval.checks.test_driver import _FakeGateway
+from robot.behavior.contracts import OFFICIAL_PROMPT, TASK_NAME
+from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
+from scripts.Behavior_eval.runner_common import (
     prepare_workspace,
     robot_state_section,
 )
-from integrations.behavior_b1k_pi05.contracts import EVALUATION_STATUS_SCHEMA
+from robot.behavior.contracts import EVALUATION_STATUS_SCHEMA
 from Emerge.utils.action_queue import (
     append_action,
     normalize_action_document,
@@ -122,7 +122,7 @@ class ControllerQueueIntegrationTest(unittest.TestCase):
         self.status_path = self.workspace / "BEHAVIOR_STATUS.json"
         self.upstream = _AutoReplyOpenPIServer()
         self.upstream.start()
-        self.driver = BehaviorB1KPi05Driver(
+        self.driver = BehaviorR1ProDriver(
             workspace=self.workspace,
             upstream_url=f"ws://127.0.0.1:{self.upstream.port}",
             listen_host="127.0.0.1",
@@ -294,7 +294,7 @@ class ControllerCancellationIntegrationTest(unittest.TestCase):
         prepare_workspace(self.workspace, task_name=TASK_NAME, instruction=OFFICIAL_PROMPT)
         self.action_file = self.workspace / "ACTION.md"
         self.state_file = self.workspace / "ROBOT_STATE.md"
-        self.driver = BehaviorB1KPi05Driver(workspace=self.workspace, listen_port=0)
+        self.driver = BehaviorR1ProDriver(workspace=self.workspace, listen_port=0)
         self.gateway = _CancelAwareGateway()
         self.driver._gateway = self.gateway
 

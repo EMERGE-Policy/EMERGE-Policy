@@ -30,7 +30,7 @@ from typing import Any
 
 try:
     from .observation import ObservationPublisher
-except ImportError:  # External plugin loading adds this directory to sys.path.
+except ImportError:  # Support direct execution of this module for diagnostics.
     from observation import ObservationPublisher
 
 logger = logging.getLogger(__name__)

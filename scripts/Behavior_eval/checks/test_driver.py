@@ -8,8 +8,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from integrations.behavior_b1k_pi05 import contracts
-from integrations.behavior_b1k_pi05.driver import BehaviorB1KPi05Driver
+from robot.behavior import contracts
+from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
 
 PROMPT = contracts.OFFICIAL_PROMPT
 
@@ -107,7 +107,7 @@ class BehaviorDriverContractTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.driver = BehaviorB1KPi05Driver(workspace=self.workspace, listen_port=0)
+        self.driver = BehaviorR1ProDriver(workspace=self.workspace, listen_port=0)
         self.gateway = _FakeGateway()
         # Valid requests must reach a terminal execution state, not hang.
         self.gateway.execution["status"] = "step_completed"
@@ -158,11 +158,11 @@ class BehaviorDriverContractTest(unittest.TestCase):
 
     def test_invalid_configuration_is_rejected_at_construction(self) -> None:
         with self.assertRaises(contracts.ConfigValidationError):
-            BehaviorB1KPi05Driver(workspace=self.workspace, max_action_steps=0)
+            BehaviorR1ProDriver(workspace=self.workspace, max_action_steps=0)
         with self.assertRaises(contracts.ConfigValidationError):
-            BehaviorB1KPi05Driver(workspace=self.workspace, required_instruction="")
+            BehaviorR1ProDriver(workspace=self.workspace, required_instruction="")
         with self.assertRaises(contracts.ConfigValidationError):
-            BehaviorB1KPi05Driver(workspace=self.workspace, execution_timeout_s=-1)
+            BehaviorR1ProDriver(workspace=self.workspace, execution_timeout_s=-1)
 
 
 class BehaviorDriverReadinessTest(unittest.TestCase):
@@ -171,7 +171,7 @@ class BehaviorDriverReadinessTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.driver = BehaviorB1KPi05Driver(workspace=self.workspace, listen_port=0)
+        self.driver = BehaviorR1ProDriver(workspace=self.workspace, listen_port=0)
         self.gateway = _FakeGateway()
         self.driver._gateway = self.gateway
 
@@ -242,7 +242,7 @@ class BehaviorDriverResultTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.driver = BehaviorB1KPi05Driver(
+        self.driver = BehaviorR1ProDriver(
             workspace=self.workspace, listen_port=0, state_sync_timeout_s=0.05
         )
         self.gateway = _FakeGateway()

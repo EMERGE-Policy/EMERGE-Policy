@@ -1,6 +1,6 @@
 ---
 name: vla
-description: Drive the BEHAVIOR-1K turning_on_radio π0.5 checkpoint through the behavior_b1k_pi05 driver, using its exact frozen instruction and bounded action budgets.
+description: Drive the BEHAVIOR-1K turning_on_radio π0.5 checkpoint through the native behavior_r1pro driver, using its exact frozen instruction and bounded action budgets.
 metadata: {"Emerge":{"always":true}}
 ---
 

@@ -1,4 +1,4 @@
-"""EMERGE external driver that owns the BEHAVIOR-to-OpenPI gateway."""
+"""Native EMERGE driver for the BEHAVIOR R1Pro evaluation bridge."""
 
 from __future__ import annotations
 
@@ -6,36 +6,20 @@ import json
 from pathlib import Path
 from typing import Any
 
+from robot.behavior import contracts
+from robot.behavior.gateway import (
+    EPISODE_FINISHED,
+    EPISODE_RESET,
+    ERROR,
+    EXECUTING,
+    INTERRUPTED,
+    NO_PROGRESS,
+    STEP_COMPLETED,
+    TERMINAL_EXECUTION_STATES,
+    TIMEOUT,
+    B1KProxyGateway,
+)
 from robot.drivers.base_driver import BaseDriver, CancelCheck
-
-try:
-    from . import contracts
-    from .gateway import (
-        EPISODE_FINISHED,
-        EPISODE_RESET,
-        ERROR,
-        EXECUTING,
-        INTERRUPTED,
-        NO_PROGRESS,
-        STEP_COMPLETED,
-        TERMINAL_EXECUTION_STATES,
-        TIMEOUT,
-        B1KProxyGateway,
-    )
-except ImportError:  # External plugin loading adds this directory to sys.path.
-    import contracts  # type: ignore[no-redef]
-    from gateway import (  # type: ignore[no-redef]
-        EPISODE_FINISHED,
-        EPISODE_RESET,
-        ERROR,
-        EXECUTING,
-        INTERRUPTED,
-        NO_PROGRESS,
-        STEP_COMPLETED,
-        TERMINAL_EXECUTION_STATES,
-        TIMEOUT,
-        B1KProxyGateway,
-    )
 
 _SUCCESS_STATES = frozenset({STEP_COMPLETED, EPISODE_FINISHED, EPISODE_RESET})
 _OK_SYNC_STATES = frozenset({STEP_COMPLETED, EPISODE_FINISHED})
@@ -48,8 +32,8 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-class BehaviorB1KPi05Driver(BaseDriver):
-    """Expose bounded π0.5 execution through the EMERGE action queue."""
+class BehaviorR1ProDriver(BaseDriver):
+    """Expose bounded BEHAVIOR R1Pro execution through the EMERGE action queue."""
 
     ROBOT_ID = "behavior_r1pro"
     OFFICIAL_PROMPT = contracts.OFFICIAL_PROMPT
@@ -108,14 +92,14 @@ class BehaviorB1KPi05Driver(BaseDriver):
             if configured_status
             else self.workspace / "BEHAVIOR_STATUS.json"
         )
-        own_dir = Path(__file__).resolve().parent
+        default_profile = Path(__file__).resolve().parents[1] / "profiles/behavior_r1pro.md"
         configured_profile = (
             Path(config["profile_path"]).expanduser()
             if config["profile_path"]
-            else own_dir / "profile_behavior_r1pro.md"
+            else default_profile
         )
         if not configured_profile.is_absolute():
-            configured_profile = own_dir / configured_profile
+            configured_profile = Path(__file__).resolve().parents[2] / configured_profile
         self._profile_path = configured_profile.resolve()
         self._last_sync_ok: bool | None = None
         self._last_applied_steps: int | None = None

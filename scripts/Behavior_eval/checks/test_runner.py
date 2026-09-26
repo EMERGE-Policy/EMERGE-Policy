@@ -17,15 +17,18 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from integrations.behavior_b1k_pi05 import contracts
-from integrations.behavior_b1k_pi05.checks import verify_artifacts
-from integrations.behavior_b1k_pi05.run_turning_on_radio_agent import (
+from robot.behavior import contracts
+from scripts.Behavior_eval.checks import verify_artifacts
+from scripts.Behavior_eval.eval_behavior_agent import (
     _actions_settled,
+    _episode_driver_config,
     _prepare_workspace,
     _resume_decision,
+    parse_args,
 )
-from integrations.behavior_b1k_pi05.runner_common import (
+from scripts.Behavior_eval.runner_common import (
     assert_fresh_output_dir,
     assert_port_available,
     install_workspace_skill,
@@ -49,6 +52,32 @@ def _pid_state(pid: int) -> str | None:
 def _alive(pid: int) -> bool:
     state = _pid_state(pid)
     return state is not None and state != "Z"
+
+
+class RunnerCliTest(unittest.TestCase):
+    def test_defaults_use_the_shorter_budget_and_headless_mode(self) -> None:
+        with patch.object(sys, "argv", ["eval_behavior_agent.py"]):
+            args = parse_args()
+        self.assertEqual(args.max_steps, 6000)
+        self.assertTrue(args.headless)
+        self.assertFalse(args.show_agent_events)
+
+    def test_native_config_name_and_live_options_are_accepted(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "eval_behavior_agent.py",
+                "--config",
+                "/tmp/provider.json",
+                "--no-headless",
+                "--show-agent-events",
+            ],
+        ):
+            args = parse_args()
+        self.assertEqual(args.agent_config, Path("/tmp/provider.json"))
+        self.assertFalse(args.headless)
+        self.assertTrue(args.show_agent_events)
 
 
 class ProcessSupervisionTest(unittest.TestCase):
@@ -146,6 +175,44 @@ class PortAndOutputDirectoryTest(unittest.TestCase):
             self.assertEqual(read_json(root / "broken.json"), {})
             (root / "list.json").write_text("[1, 2]", encoding="utf-8")
             self.assertEqual(read_json(root / "list.json"), {})
+
+
+class NativeDriverConfigurationTest(unittest.TestCase):
+    def test_episode_config_targets_the_native_driver_and_workspace(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            status_path = workspace / "BEHAVIOR_STATUS.json"
+            path = _episode_driver_config(
+                {
+                    "workspace": "unused",
+                    "upstream_url": "ws://127.0.0.1:1",
+                    "required_instruction": contracts.OFFICIAL_PROMPT,
+                    "max_action_steps": 1,
+                },
+                output_dir=root,
+                workspace=workspace,
+                status_path=status_path,
+                upstream_port=8123,
+                gateway_port=8124,
+                max_action_steps=20_002,
+                state_sync_timeout_s=45.0,
+            )
+            config = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(config["workspace"], str(workspace))
+            self.assertEqual(config["upstream_url"], "ws://127.0.0.1:8123")
+            self.assertEqual(config["listen_port"], 8124)
+            self.assertEqual(config["max_action_steps"], 20_002)
+            self.assertEqual(config["status_path"], str(status_path))
+            self.assertEqual(config["expected_task"], contracts.TASK_NAME)
+
+    def test_behavior_driver_is_registered_without_a_plugin(self) -> None:
+        from robot.drivers import DRIVER_REGISTRY
+
+        self.assertEqual(
+            DRIVER_REGISTRY["behavior_r1pro"],
+            "robot.drivers.behavior_r1pro_driver.BehaviorR1ProDriver",
+        )
 
 
 class EpisodeVerdictTest(unittest.TestCase):
@@ -304,7 +371,7 @@ class VerifyArtifactsTest(unittest.TestCase):
     ) -> Path:
         import numpy as np
 
-        from integrations.behavior_b1k_pi05.observation import ObservationPublisher
+        from robot.behavior.observation import ObservationPublisher
 
         workspace = root / "workspace"
         workspace.mkdir(parents=True)

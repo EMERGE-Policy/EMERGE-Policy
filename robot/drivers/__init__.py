@@ -10,6 +10,7 @@ from robot.plugins import activate_external_driver, list_external_drivers, resol
 # Format:  "short_name": "module_path.ClassName"
 
 DRIVER_REGISTRY: dict[str, str] = {
+    "behavior_r1pro": "robot.drivers.behavior_r1pro_driver.BehaviorR1ProDriver",
     "libero_mujoco": "robot.drivers.mujoco_driver.LiberoMujocoDriver",
 }
 

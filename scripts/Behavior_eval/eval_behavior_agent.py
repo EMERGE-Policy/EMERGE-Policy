@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Run one BEHAVIOR turning_on_radio episode with the real EMERGE Agent.
 
-Unlike the action-queue smoke runner, the actions here are chosen by the LLM
-Agent through ``execute_robot_action``.  The runner only supervises the three
-processes, installs the BEHAVIOR ``vla`` skill, and decides when to resume a
-session that stopped early without the episode being over.
+The actions are chosen by the LLM Agent through ``execute_robot_action``. The
+runner owns the episode workspace and supervises OpenPI, the native EMERGE
+Controller, the BEHAVIOR evaluator, and the Agent process.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import subprocess
@@ -20,76 +20,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-PLUGIN_ROOT = Path(__file__).resolve().parent
-EMERGE_ROOT = PLUGIN_ROOT.parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+EMERGE_ROOT = SCRIPT_DIR.parents[1]
 WORKSPACE_ROOT = EMERGE_ROOT.parent
 if str(EMERGE_ROOT) not in sys.path:
     sys.path.insert(0, str(EMERGE_ROOT))
 
-try:
-    from .contracts import (
-        OFFICIAL_PROMPT,
-        TASK_NAME,
-        agent_exit_code,
-        classify_episode,
-        episode_terminated,
-        is_resumable_finish_reason,
-    )
-except ImportError:  # Direct script execution adds this directory to sys.path.
-    sys.path.insert(0, str(PLUGIN_ROOT))
-    from contracts import (  # type: ignore[no-redef]
-        OFFICIAL_PROMPT,
-        TASK_NAME,
-        agent_exit_code,
-        classify_episode,
-        episode_terminated,
-        is_resumable_finish_reason,
-    )
-
-try:
-    from .run_action_queue_smoke import (
-        _register_plugin,
-        _write_driver_config,
-    )
-    from .runner_common import (
-        assert_fresh_output_dir,
-        assert_port_available,
-        atomic_write_json,
-        behavior_environment,
-        default_output_dir,
-        install_workspace_skill,
-        prepare_workspace,
-        read_json,
-        require_executable,
-        require_path,
-        robot_state_section,
-        spawn_process,
-        stop_process_group,
-        wait_for_condition,
-        wait_for_health,
-    )
-except ImportError:  # Direct script execution.
-    from run_action_queue_smoke import (  # type: ignore[no-redef]
-        _register_plugin,
-        _write_driver_config,
-    )
-    from runner_common import (  # type: ignore[no-redef]
-        assert_fresh_output_dir,
-        assert_port_available,
-        atomic_write_json,
-        behavior_environment,
-        default_output_dir,
-        install_workspace_skill,
-        prepare_workspace,
-        read_json,
-        require_executable,
-        require_path,
-        robot_state_section,
-        spawn_process,
-        stop_process_group,
-        wait_for_condition,
-        wait_for_health,
-    )
+from robot.behavior.contracts import (  # noqa: E402
+    OFFICIAL_PROMPT,
+    TASK_NAME,
+    agent_exit_code,
+    classify_episode,
+    episode_terminated,
+    is_resumable_finish_reason,
+    validate_driver_config,
+)
+from scripts.Behavior_eval.runner_common import (  # noqa: E402
+    assert_fresh_output_dir,
+    assert_port_available,
+    atomic_write_json,
+    behavior_environment,
+    default_output_dir,
+    install_workspace_skill,
+    prepare_workspace,
+    read_json,
+    require_executable,
+    require_path,
+    robot_state_section,
+    spawn_process,
+    stop_process_group,
+    wait_for_condition,
+    wait_for_health,
+)
 
 from Emerge.runtime.configuration import load_runtime_config  # noqa: E402
 from Emerge.runtime.protocol import RunRequest, RunResult  # noqa: E402
@@ -98,6 +60,8 @@ from Emerge.utils.action_queue import (  # noqa: E402
     parse_action_markdown,
 )
 from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
+
+DEFAULT_DRIVER_CONFIG = EMERGE_ROOT / "dev/behavior_agent_eval.json"
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -115,7 +79,7 @@ EVALUATION_INSTRUCTIONS = f"""
 ## BEHAVIOR-1K Evaluation Rules
 
 You control one R1Pro episode for `turning_on_radio` through the
-`behavior_b1k_pi05` driver.
+`behavior_r1pro` driver.
 
 - Use `execute_robot_action` with action type `vla_execute`.
 - The instruction must be exactly, character for character: `{OFFICIAL_PROMPT}`
@@ -154,8 +118,20 @@ def parse_args() -> argparse.Namespace:
         default=Path(sys.executable),
         help="Python interpreter containing EMERGE's Agent and Controller dependencies.",
     )
-    parser.add_argument("--agent-config", type=Path)
+    parser.add_argument(
+        "--config",
+        "--agent-config",
+        dest="agent_config",
+        type=Path,
+        help="EMERGE runtime/provider config (same meaning as `Emerge agent --config`).",
+    )
     parser.add_argument("--agent-model")
+    parser.add_argument(
+        "--driver-config",
+        type=Path,
+        default=DEFAULT_DRIVER_CONFIG,
+        help="Base configuration for the native behavior_r1pro driver.",
+    )
     parser.add_argument("--agent-max-iterations", type=int, default=20)
     parser.add_argument(
         "--max-agent-feedback-rounds",
@@ -175,8 +151,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=20_000,
-        help="Maximum BEHAVIOR simulator steps for the episode. Default: 20000.",
+        default=6_000,
+        help="Maximum BEHAVIOR simulator steps for the episode. Default: 6000.",
     )
     parser.add_argument("--upstream-port", type=int, default=8001)
     parser.add_argument("--gateway-port", type=int, default=8000)
@@ -202,6 +178,17 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--headless",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run Isaac Sim without a window. Use --no-headless to open the simulator UI.",
+    )
+    parser.add_argument(
+        "--show-agent-events",
+        action="store_true",
+        help="Print Agent messages, tool calls, and action state changes while the run is active.",
+    )
     return parser.parse_args()
 
 
@@ -224,6 +211,57 @@ def _prepare_workspace(workspace: Path) -> Path:
     prepare_workspace(workspace, task_name=TASK_NAME, instruction=OFFICIAL_PROMPT)
     install_workspace_skill(workspace)
     return workspace
+
+
+def _load_driver_config(path: Path) -> dict[str, Any]:
+    """Load the checked-in driver defaults before applying episode values."""
+    resolved = require_path(path, "BEHAVIOR driver config")
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid BEHAVIOR driver config: {resolved}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"BEHAVIOR driver config must be a JSON object: {resolved}")
+    return payload
+
+
+def _execution_timeout(action_steps: int) -> float:
+    """Return the existing generous per-action timeout for a policy rollout."""
+    return max(600.0, min(int(action_steps), 800) * 20.0)
+
+
+def _episode_driver_config(
+    base_config: dict[str, Any],
+    *,
+    output_dir: Path,
+    workspace: Path,
+    status_path: Path,
+    upstream_port: int,
+    gateway_port: int,
+    max_action_steps: int,
+    state_sync_timeout_s: float,
+) -> Path:
+    """Write one episode-local config, following the native LIBERO runner."""
+    config = copy.deepcopy(base_config)
+    config.update(
+        {
+            "workspace": str(workspace),
+            "upstream_url": f"ws://127.0.0.1:{upstream_port}",
+            "listen_host": "127.0.0.1",
+            "listen_port": gateway_port,
+            "required_instruction": OFFICIAL_PROMPT,
+            "max_action_steps": max_action_steps,
+            "status_path": str(status_path),
+            "execution_timeout_s": _execution_timeout(max_action_steps),
+            "state_sync_timeout_s": state_sync_timeout_s,
+            "expected_task": TASK_NAME,
+            "expected_instance_id": None,
+        }
+    )
+    normalized = validate_driver_config(config)
+    path = output_dir / "driver_config.json"
+    atomic_write_json(path, normalized)
+    return path
 
 
 def _agent_message(max_action_steps: int) -> str:
@@ -364,6 +402,56 @@ def _read_agent_result(process: subprocess.Popen[bytes]) -> dict[str, Any]:
     return result.model_dump(mode="json")
 
 
+def _drain_agent_events(process: subprocess.Popen[bytes] | None) -> None:
+    """Print newly persisted, user-visible Agent events in a compact form."""
+    if process is None:
+        return
+    events_path = Path(process.emerge_result_path).parent / "events.jsonl"
+    offset = int(getattr(process, "emerge_events_offset", 0))
+    try:
+        with events_path.open("r", encoding="utf-8") as stream:
+            stream.seek(offset)
+            lines = stream.readlines()
+            process.emerge_events_offset = stream.tell()
+    except (FileNotFoundError, OSError):
+        return
+
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event_type = str(event.get("type") or "")
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if event_type == "llm.started":
+            print(
+                f"[Agent] thinking: iteration={data.get('iteration')} "
+                f"model={data.get('model')}",
+                flush=True,
+            )
+        elif event_type == "assistant.message":
+            text = str(data.get("text") or "").strip()
+            if text:
+                print(f"[Agent] {text}", flush=True)
+        elif event_type == "tool.started":
+            arguments = json.dumps(data.get("arguments") or {}, ensure_ascii=False)
+            if len(arguments) > 600:
+                arguments = arguments[:597] + "..."
+            print(f"[Agent] tool: {data.get('tool')} {arguments}", flush=True)
+        elif event_type in {"tool.completed", "tool.failed", "tool.cancelled"}:
+            print(
+                f"[Agent] {event_type}: {data.get('tool')} "
+                f"duration_ms={data.get('duration_ms')}",
+                flush=True,
+            )
+        elif event_type == "action.updated":
+            print(
+                f"[Agent] action: {data.get('action_type')} "
+                f"status={data.get('status')} id={data.get('action_id') or data.get('id')}",
+                flush=True,
+            )
+
+
 def _record_agent_result(process: subprocess.Popen[bytes], results: list[dict[str, Any]]) -> None:
     if any(item.get("run_id") == process.emerge_run_id for item in results):
         return
@@ -464,6 +552,7 @@ def main() -> int:
     )
     agent_python = require_executable(args.agent_python, "EMERGE Agent Python")
     args.agent_python = agent_python
+    base_driver_config = _load_driver_config(args.driver_config)
     agent_model = _validate_agent_provider(args)
     print(f"EMERGE Agent provider ready for model: {agent_model}", flush=True)
     robot_config = require_path(
@@ -475,24 +564,23 @@ def main() -> int:
     logs_dir = output_dir / "logs"
     workspace = output_dir / "workspace"
     status_path = workspace / "BEHAVIOR_STATUS.json"
-    plugin_home = output_dir / ".emerge_plugins"
     logs_dir.mkdir(parents=True, exist_ok=True)
     assert_port_available(args.upstream_port, label="OpenPI server")
     assert_port_available(args.gateway_port, label="EMERGE gateway")
 
     _prepare_workspace(workspace)
-    runtime_environment = _register_plugin(agent_python, plugin_home)
+    runtime_environment = dict(os.environ)
     runtime_environment["NO_COLOR"] = "1"
     runtime_environment["TERM"] = "dumb"
-    driver_config = output_dir / "driver_config.json"
     max_action_steps = args.max_steps + 2
-    _write_driver_config(
-        driver_config,
+    driver_config = _episode_driver_config(
+        base_driver_config,
+        output_dir=output_dir,
         workspace=workspace,
+        status_path=status_path,
         upstream_port=args.upstream_port,
         gateway_port=args.gateway_port,
         max_action_steps=max_action_steps,
-        status_path=status_path,
         state_sync_timeout_s=args.state_sync_timeout,
     )
 
@@ -546,7 +634,7 @@ def main() -> int:
                     "-m",
                     "robot.controller",
                     "--driver",
-                    "behavior_b1k_pi05",
+                    "behavior_r1pro",
                     "--workspace",
                     str(workspace),
                     "--driver-config",
@@ -585,6 +673,7 @@ def main() -> int:
                 "--status-file",
                 str(status_path),
                 "--write-video" if args.write_video else "--no-write-video",
+                "--headless" if args.headless else "--no-headless",
             ]
             evaluator = spawn_process(
                 evaluator_command,
@@ -621,6 +710,8 @@ def main() -> int:
 
             deadline = time.monotonic() + args.episode_timeout
             while True:
+                if args.show_agent_events:
+                    _drain_agent_events(agent)
                 status = read_json(status_path)
                 if status.get("done"):
                     try:
@@ -649,6 +740,8 @@ def main() -> int:
                     _settle_agent(agent, agent_results, timeout_s=5.0)
                     break
                 if agent.poll() is not None:
+                    if args.show_agent_events:
+                        _drain_agent_events(agent)
                     _record_agent_result(agent, agent_results)
                     finish_reason = str(agent_results[-1].get("finish_reason") or "agent_exit")
                     termination_reason = f"agent_{finish_reason}"
@@ -697,6 +790,8 @@ def main() -> int:
         termination_reason = "runner_exception"
         _settle_agent(agent, agent_results, timeout_s=5.0)
     finally:
+        if args.show_agent_events:
+            _drain_agent_events(agent)
         for process in reversed(processes):
             stop_process_group(process)
 
