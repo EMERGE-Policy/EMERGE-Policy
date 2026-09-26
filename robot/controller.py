@@ -67,7 +67,9 @@ def _publish_runtime_state(driver: BaseDriver, path: Path) -> None:
         scene_graph=runtime_state.get("scene_graph"),
         map_data=runtime_state.get("map"),
         tf_data=runtime_state.get("tf"),
-        updated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z",
+        updated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+            "+00:00", "Z"
+        ),
     )
     save_robot_state_doc(path, updated)
 

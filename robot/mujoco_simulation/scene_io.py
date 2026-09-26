@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -49,7 +50,13 @@ def default_robot_state_doc() -> dict[str, Any]:
 
 
 def save_robot_state_doc(path: Path, robot_state: dict[str, Any]) -> None:
-    """Write a full robot-state document to ``ROBOT_STATE.md``."""
+    """Write a full robot-state document to ``ROBOT_STATE.md``.
+
+    The document is published with a temporary file plus ``os.replace`` so a
+    reader can never observe a half-written file.  The Agent re-reads this file
+    after every action, so a truncated read would look like a valid but empty
+    state document.
+    """
     state_json = json.dumps(robot_state, indent=2, ensure_ascii=False)
     content = (
         "# Robot State\n\n"
@@ -63,7 +70,10 @@ def save_robot_state_doc(path: Path, robot_state: dict[str, Any]) -> None:
         "Controller may have updated the file after the action.\n\n"
         f"{_FENCE_OPEN}\n{state_json}\n{_FENCE_CLOSE}\n"
     )
-    path.write_text(content, encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def merge_robot_state_doc(

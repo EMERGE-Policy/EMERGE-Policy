@@ -44,9 +44,11 @@ class EmbodiedActionTool(Tool):
     def description(self) -> str:
         return (
             "Execute a physical action on the robot. "
-            "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport. "
+            "The actions and parameters accepted by the active embodiment are the ones listed in "
+            "its EMBODIED.md profile; read that file before assuming a motion primitive exists. "
+            "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport when the embodiment provides them. "
             "Choose concrete poses, line segments, arc geometry, and gripper openings from the latest ROBOT_STATE.md or a successful object_location result. "
-            "Use vla_execute for the current visually sensitive contact phase; in a multi-step plan its instruction must describe only the current subgoal, not the complete mission. "
+            "Use vla_execute for the current visually sensitive phase. Its instruction and step budget follow the active embodiment: some drivers require a phase-local instruction, while a single-task checkpoint may require the exact task sentence and reject any rewrite. "
             "Every tool call MUST include a non-empty `parameters` object. "
             "Do not call this tool with only `action_type` and `reasoning`."
         )
@@ -72,7 +74,8 @@ class EmbodiedActionTool(Tool):
                     "description": (
                         "The parameters for the action. "
                         "Vector parameters prefer list form like [x,y,z], but keyed objects like {x,y,z} are accepted. "
-                        "Simulation end-effector targets use metres; Panda reach is approximately 0.85 m from the current robot base pose in ROBOT_STATE.md, and negative x/y values can be valid. "
+                        "Units and reach limits are properties of the active embodiment, not of this schema: "
+                        "the bundled LIBERO/Panda simulation profile uses metres with roughly 0.85 m of reach from the base pose, and negative x/y values can be valid. "
                         "Examples:\n"
                         "- move_to_pose: {position_m: [x,y,z], orientation_euler: [r,p,y]} or {orientation_quat: [x,y,z,w]}\n"
                         "- move_linear: {position_m: [x,y,z]} or {delta_m: [dx,dy,dz]}, optionally with orientation\n"
@@ -82,10 +85,9 @@ class EmbodiedActionTool(Tool):
                         "For move_to_pose, ALWAYS provide position_m and either orientation_euler or orientation_quat. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
                         "For follow_arc, ALWAYS provide center, axis, radius_m, and one of angle_deg or angle_rad. "
-                        "For vla_execute, ALWAYS provide a natural language instruction (or prompt) AND step "
-                        "(the number of action steps the VLA runs before returning control to you). "
-                        "The action completes when the step budget is used up or the goal is reached earlier, "
-                        "so you can interleave VLA with rule-based actions."
+                        "For vla_execute, ALWAYS provide the instruction (or prompt) AND step. "
+                        "`step` is the number of policy actions the VLA may consume before returning control to you. "
+                        "The action completes when that budget is used up, or earlier if the driver reports that the episode ended."
                     ),
                 },
                 "reasoning": {
