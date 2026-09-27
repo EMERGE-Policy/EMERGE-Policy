@@ -45,6 +45,7 @@ def _calibration() -> dict:
 
 def _publish_behavior_observation(workspace: Path) -> None:
     image = np.zeros((224, 224, 3), dtype=np.uint8)
+    depth = np.full((224, 224, 1), 1.25, dtype=np.float32)
     poses = np.array(
         [
             -0.2, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
@@ -58,6 +59,9 @@ def _publish_behavior_observation(workspace: Path) -> None:
             "robot::robot:zed_link:Camera:0::rgb": image,
             "robot::robot:left_realsense_link:Camera:0::rgb": image,
             "robot::robot:right_realsense_link:Camera:0::rgb": image,
+            "robot::robot:zed_link:Camera:0::depth_linear": depth,
+            "robot::robot:left_realsense_link:Camera:0::depth_linear": depth,
+            "robot::robot:right_realsense_link:Camera:0::depth_linear": depth,
             "robot::cam_rel_poses": poses,
             "robot::proprio": np.zeros((1, 61), dtype=np.float32),
         },
@@ -97,6 +101,70 @@ class BehaviorObjectLocationCompatibilityTest(unittest.TestCase):
             )
             self.assertTrue(all(view.intrinsics.shape == (3, 3) for view in observation.views))
             self.assertTrue(all(view.T_world_camera.shape == (4, 4) for view in observation.views))
+            self.assertTrue(observation.has_rgbd)
+            self.assertTrue(all(view.depth_m is not None for view in observation.views))
+            self.assertTrue(all(view.depth_m.shape == (224, 224) for view in observation.views))
+
+    def test_rgbd_manifest_requires_every_depth_file(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            manifest_path = workspace / "artifacts/observations/observation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["views"][0].pop("depth_path")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "missing required depth_path"):
+                ObservationStore(workspace).load()
+
+    def test_rgb_and_depth_shapes_must_match(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            manifest_path = workspace / "artifacts/observations/observation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            depth_path = workspace / manifest["views"][0]["depth_path"]
+            np.save(depth_path, np.ones((12, 13), dtype=np.float32), allow_pickle=False)
+
+            with self.assertRaisesRegex(ValueError, "RGB/depth shapes differ"):
+                ObservationStore(workspace).load()
+
+    def test_depth_requires_metre_units_and_valid_samples(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            manifest_path = workspace / "artifacts/observations/observation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["views"][0]["depth_unit"] = "millimeter"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "depth_unit must be 'meter'"):
+                ObservationStore(workspace).load()
+
+            manifest["views"][0]["depth_unit"] = "meter"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            depth_path = workspace / manifest["views"][0]["depth_path"]
+            np.save(
+                depth_path,
+                np.full((224, 224), np.nan, dtype=np.float32),
+                allow_pickle=False,
+            )
+            with self.assertRaisesRegex(ValueError, "no finite positive samples"):
+                ObservationStore(workspace).load()
+
+    def test_legacy_rgb_only_manifest_remains_loadable_for_vggt(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            manifest_path = workspace / "artifacts/observations/observation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["rgbd"] = False
+            for view in manifest["views"]:
+                view.pop("depth_path", None)
+                view.pop("depth_unit", None)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            observation = ObservationStore(workspace).load()
+            self.assertFalse(observation.has_rgbd)
 
     def test_segment_candidates_sends_three_views_to_both_models(self) -> None:
         with TemporaryDirectory() as temporary:
