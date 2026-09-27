@@ -12,6 +12,7 @@ from unittest.mock import patch
 import msgpack
 import numpy as np
 
+from Emerge.subagents.object_location.agent import _compact_objects
 from Emerge.subagents.object_location.tools.location.engine import (
     CandidateSegmentation,
     LocationEngine,
@@ -86,6 +87,35 @@ class _RecordingClient:
 
 
 class BehaviorObjectLocationCompatibilityTest(unittest.TestCase):
+    def test_agent_result_keeps_geometry_needed_for_precontact(self) -> None:
+        compact = _compact_objects(
+            {
+                "objects": [
+                    {
+                        "name": "radio power button",
+                        "found": True,
+                        "frame": "robot_base",
+                        "position_m": [0.5, -0.1, 0.9],
+                        "size_m": [0.04, 0.03, 0.02],
+                        "rpy_rad": [0.0, 0.0, 0.0],
+                        "position_type": "visible_surface_bbox_center",
+                        "bbox_world_min_m": [0.48, -0.115, 0.89],
+                        "bbox_world_max_m": [0.52, -0.085, 0.91],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(
+            compact[0]["bbox_world_min_m"], [0.48, -0.115, 0.89]
+        )
+        self.assertEqual(
+            compact[0]["bbox_world_max_m"], [0.52, -0.085, 0.91]
+        )
+        self.assertEqual(
+            compact[0]["position_type"], "visible_surface_bbox_center"
+        )
+
     def test_object_location_loads_all_calibrated_behavior_views(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)

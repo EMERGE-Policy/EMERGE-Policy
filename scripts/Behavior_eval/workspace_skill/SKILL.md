@@ -52,12 +52,13 @@ button coordinate.
 
 ### 3. Measured pre-contact approach
 
-If the power control was measured, select the nearer arm using the current
-left/right end-effector positions in the manifest. Derive a pre-contact point
-8-15 cm from the control toward that end effector. Dispatch `move_to_pose` to
-the derived point. A short `move_linear` may follow only when the target is
-measured and the complete segment is visibly clear. Omit `orientation_quat`
-unless the current calibrated orientation is explicitly available and useful.
+If the power control has a measured bounding box, pass the returned
+`bbox_world_min_m` and `bbox_world_max_m` directly to `move_to_pose`, with
+`side: auto` and `standoff_m: 0.12`. The driver deterministically selects the
+nearer arm, approaches the near box surface rather than its occupied centre,
+and preserves the live wrist orientation. Do not copy the box centre into
+`position_m`. A short `move_linear` may follow only when the target is measured
+and the complete segment is visibly clear.
 
 If the driver rejects IK or reports an FK/state mismatch, do not alter the
 coordinate or retry the same primitive. Use a short VLA chunk to reposition the

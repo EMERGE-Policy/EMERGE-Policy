@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from robot.behavior.r1pro_kinematics import R1ProKinematics
 from robot.behavior.r1pro_motion import (
@@ -13,7 +14,6 @@ from robot.behavior.r1pro_motion import (
     plan_move_to_pose,
     plan_set_gripper,
 )
-
 
 URDF = (
     Path(__file__).resolve().parents[3].parent
@@ -29,6 +29,7 @@ def _state(kinematics: R1ProKinematics) -> dict:
         arms[side] = {
             "qpos": [0.0] * 7,
             "eef_position": pose[:3, 3].tolist(),
+            "eef_orientation_xyzw": Rotation.from_matrix(pose[:3, :3]).as_quat().tolist(),
         }
     return {"trunk": {"qpos": TRUNK.tolist()}, "arms": arms}
 
@@ -46,7 +47,9 @@ class R1ProMotionPlanningTest(unittest.TestCase):
 
     def test_move_to_pose_is_bounded_and_reaches_the_requested_position(self) -> None:
         known_qpos = np.asarray([-0.25, 0.45, 0.2, -0.7, 0.25, 0.1, -0.2])
-        target = self.kinematics.forward("left", TRUNK, known_qpos)[:3, 3]
+        target_pose = self.kinematics.forward("left", TRUNK, known_qpos)
+        target = target_pose[:3, 3]
+        target_orientation = Rotation.from_matrix(target_pose[:3, :3]).as_quat()
 
         plan = plan_move_to_pose(
             self.kinematics,
@@ -54,6 +57,7 @@ class R1ProMotionPlanningTest(unittest.TestCase):
             self.hold,
             side="left",
             position_m=target.tolist(),
+            orientation_quat=target_orientation.tolist(),
             max_joint_step_rad=0.03,
         )
 
@@ -64,6 +68,10 @@ class R1ProMotionPlanningTest(unittest.TestCase):
         self.assertLessEqual(float(np.max(np.abs(deltas))), 0.030001)
         final_pose = self.kinematics.forward("left", TRUNK, actions[-1, 7:14])
         self.assertLess(float(np.linalg.norm(final_pose[:3, 3] - target)), 0.01)
+        orientation_error = Rotation.from_matrix(
+            final_pose[:3, :3] @ target_pose[:3, :3].T
+        ).magnitude()
+        self.assertLess(float(orientation_error), 0.15)
 
     def test_move_linear_tracks_intermediate_cartesian_waypoints(self) -> None:
         start = np.asarray(self.state["arms"]["right"]["eef_position"])

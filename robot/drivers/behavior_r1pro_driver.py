@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from robot.behavior import contracts
+from robot.behavior.approach import compute_precontact_pose
 from robot.behavior.gateway import (
     EPISODE_FINISHED,
     EPISODE_RESET,
@@ -233,17 +234,61 @@ class BehaviorR1ProDriver(BaseDriver):
                 hold = self._gateway.current_hold_action()
                 if action_type == "move_to_pose":
                     unknown = sorted(
-                        set(params) - {"side", "position_m", "orientation_quat"}
+                        set(params)
+                        - {
+                            "side",
+                            "position_m",
+                            "orientation_quat",
+                            "bbox_world_min_m",
+                            "bbox_world_max_m",
+                            "standoff_m",
+                        }
                     )
                     if unknown:
                         raise ValueError("move_to_pose received unknown parameters: " + ", ".join(unknown))
+                    has_position = "position_m" in params
+                    has_bbox = (
+                        "bbox_world_min_m" in params or "bbox_world_max_m" in params
+                    )
+                    if has_position == has_bbox:
+                        raise ValueError(
+                            "move_to_pose requires exactly one of position_m or a "
+                            "bbox_world_min_m/bbox_world_max_m pair"
+                        )
+                    if has_position and "standoff_m" in params:
+                        raise ValueError(
+                            "standoff_m is valid only with bbox pre-contact geometry"
+                        )
+                    side = params.get("side")
+                    position = params.get("position_m")
+                    orientation = params.get("orientation_quat")
+                    if has_bbox:
+                        if "bbox_world_min_m" not in params or "bbox_world_max_m" not in params:
+                            raise ValueError(
+                                "bbox pre-contact requires bbox_world_min_m and bbox_world_max_m"
+                            )
+                        if orientation is not None:
+                            raise ValueError(
+                                "bbox pre-contact preserves the current wrist orientation; "
+                                "do not provide orientation_quat"
+                            )
+                        precontact = compute_precontact_pose(
+                            state,
+                            params["bbox_world_min_m"],
+                            params["bbox_world_max_m"],
+                            side=side,
+                            standoff_m=params.get("standoff_m", 0.12),
+                        )
+                        side = precontact.side
+                        position = list(precontact.position_m)
+                        orientation = list(precontact.orientation_quat)
                     plan = plan_move_to_pose(
                         self._kinematics,
                         state,
                         hold,
-                        side=params.get("side"),
-                        position_m=params.get("position_m"),
-                        orientation_quat=params.get("orientation_quat"),
+                        side=side,
+                        position_m=position,
+                        orientation_quat=orientation,
                         max_steps=self._primitive_max_steps,
                     )
                 elif action_type == "move_linear":

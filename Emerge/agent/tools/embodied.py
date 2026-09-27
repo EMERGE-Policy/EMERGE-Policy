@@ -16,13 +16,13 @@ except ImportError:  # pragma: no cover - fallback for lightweight test envs
 
 from Emerge.base import Tool
 from Emerge.utils.action_queue import (
+    action_timestamp,
     append_action,
     empty_action_document,
     normalize_action_document,
     parse_action_markdown,
     pending_action_type,
     update_action_document,
-    action_timestamp,
 )
 
 if TYPE_CHECKING:
@@ -79,12 +79,12 @@ class EmbodiedActionTool(Tool):
                         "Units and reach limits are properties of the active embodiment, not of this schema: "
                         "the bundled LIBERO/Panda simulation profile uses metres with roughly 0.85 m of reach from the base pose, and negative x/y values can be valid. "
                         "Examples:\n"
-                        "- move_to_pose: {position_m: [x,y,z], orientation_euler: [r,p,y]} or {orientation_quat: [x,y,z,w]}\n"
+                        "- move_to_pose: {position_m: [x,y,z], orientation_euler: [r,p,y]} or {orientation_quat: [x,y,z,w]}; an embodiment may also accept a measured bounding box\n"
                         "- move_linear: {position_m: [x,y,z]} or {delta_m: [dx,dy,dz]}, optionally with orientation\n"
                         "- set_gripper: {opening_m: 0.08} or {command: 'open'} or {command: 'close'}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
-                        "For move_to_pose, ALWAYS provide position_m; orientation requirements are defined by the active embodiment. "
+                        "For move_to_pose, provide the target form required by the active embodiment profile; orientation requirements are also embodiment-specific. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
                         "For follow_arc, ALWAYS provide center, axis, radius_m, and one of angle_deg or angle_rad. "
                         "For vla_execute, ALWAYS provide the instruction (or prompt) AND step. "

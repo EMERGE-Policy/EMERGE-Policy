@@ -106,6 +106,9 @@ def _compact_objects(
                     "position_m": result["position_m"],
                     "size_m": result["size_m"],
                     "rpy_rad": result["rpy_rad"],
+                    "position_type": result.get("position_type", "object_bbox_center"),
+                    "bbox_world_min_m": result["bbox_world_min_m"],
+                    "bbox_world_max_m": result["bbox_world_max_m"],
                 }
             )
         else:

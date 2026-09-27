@@ -29,6 +29,8 @@ class BehaviorAgentPlanTest(unittest.TestCase):
             "Verify or recover",
             '"agent_name": "object_location"',
             "frame: robot_base",
+            "bbox_world_min_m",
+            "standoff_m: 0.12",
             "move_to_pose",
             "move_linear",
             "task_verification",
@@ -49,6 +51,7 @@ class BehaviorAgentPlanTest(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertIn(f"`{action}`", profile)
         self.assertIn("Switching back to π0.5 resets its action chunk", profile)
+        self.assertIn("preserve the current wrist orientation", profile)
         self.assertIn("sole authoritative success signal", profile)
 
     def test_runner_prompt_does_not_restore_the_old_vla_only_route(self) -> None:

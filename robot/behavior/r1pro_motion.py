@@ -10,7 +10,6 @@ import numpy as np
 
 from robot.behavior.r1pro_kinematics import IKSolution, R1ProKinematics
 
-
 ARM_ACTION_SLICE = {"left": slice(7, 14), "right": slice(15, 22)}
 GRIPPER_ACTION_INDEX = {"left": 14, "right": 22}
 MAX_STATE_MODEL_POSITION_ERROR_M = 0.05
@@ -36,12 +35,13 @@ def plan_move_to_pose(
 ) -> MotionPlan:
     current, trunk = _joint_state(robot_state, side)
     _validate_model_state(kinematics, robot_state, side, current, trunk)
+    target_orientation = _target_orientation(robot_state, side, orientation_quat)
     solution = kinematics.solve(
         side,
         position_m,
         trunk,
         current,
-        target_orientation_xyzw=orientation_quat,
+        target_orientation_xyzw=target_orientation,
     )
     _require_solution(solution, side)
     target = np.asarray(solution.arm_qpos, dtype=np.float64)
@@ -74,6 +74,7 @@ def plan_move_linear(
 ) -> MotionPlan:
     current, trunk = _joint_state(robot_state, side)
     _validate_model_state(kinematics, robot_state, side, current, trunk)
+    target_orientation = _target_orientation(robot_state, side, orientation_quat)
     start_position = np.asarray(robot_state["arms"][side]["eef_position"], dtype=np.float64)
     target_position = _vector(position_m, 3, "position_m")
     distance = float(np.linalg.norm(target_position - start_position))
@@ -89,7 +90,7 @@ def plan_move_linear(
             waypoint,
             trunk,
             seed,
-            target_orientation_xyzw=orientation_quat,
+            target_orientation_xyzw=target_orientation,
         )
         _require_solution(solution, side)
         target = np.asarray(solution.arm_qpos, dtype=np.float64)
@@ -159,6 +160,28 @@ def _joint_state(robot_state: dict[str, Any], side: str) -> tuple[np.ndarray, np
     except (KeyError, TypeError) as exc:
         raise ValueError("latest R1Pro state does not contain arm and trunk qpos") from exc
     return arm, trunk
+
+
+def _target_orientation(
+    robot_state: dict[str, Any], side: str, requested: list[float] | None
+) -> np.ndarray:
+    if requested is not None:
+        return _normalized_quaternion(requested, "orientation_quat")
+    try:
+        current = robot_state["arms"][side]["eef_orientation_xyzw"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"latest R1Pro state does not contain the {side} end-effector orientation"
+        ) from exc
+    return _normalized_quaternion(current, f"{side} end-effector orientation")
+
+
+def _normalized_quaternion(value: Any, name: str) -> np.ndarray:
+    quaternion = _vector(value, 4, name)
+    norm = float(np.linalg.norm(quaternion))
+    if norm < 1e-12:
+        raise ValueError(f"{name} must be non-zero")
+    return quaternion / norm
 
 
 def _interpolate_arm_actions(

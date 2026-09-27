@@ -47,8 +47,23 @@ Move one end effector toward a reachable measured position:
 
 `side` is `left` or `right`. `position_m` must come from a successful
 `object_location` result in `robot_base`, or be a clearance point derived from
-that result and the current end-effector position. `orientation_quat` in XYZW
-order is optional. When it is omitted, IK constrains position only.
+that result. When the result describes the target object or control with a
+bounding box, prefer the deterministic pre-contact form:
+
+```json
+{
+  "side": "auto",
+  "bbox_world_min_m": [0.48, -0.12, 0.82],
+  "bbox_world_max_m": [0.62, 0.02, 0.96],
+  "standoff_m": 0.12
+}
+```
+
+The driver selects the nearer arm when `side` is `auto`, finds the box surface
+toward that arm, and stops 8-15 cm before it. This avoids commanding the centre
+of an occupied object as an end-effector target. For an explicit `position_m`,
+`side` must be `left` or `right`. `orientation_quat` uses XYZW order. When it
+is omitted, both motion primitives preserve the current wrist orientation.
 
 ### `move_linear`
 
@@ -110,10 +125,11 @@ Stop immediately when `evaluation.done` is true. Treat `evaluation.phase ==
    `object_location` specialist. Ask it to locate the radio and, when visibly
    separable in at least two views, its power control. The returned frame must
    be `robot_base`.
-4. If a control position is measured and reachable, choose the arm on the same
-   side. Derive a pre-contact point 8-15 cm toward the current end effector from
-   the measured control. Use `move_to_pose` for that clearance point. Use a
-   short `move_linear` only when its entire path is visibly clear.
+4. If a control bounding box is measured and reachable, pass its
+   `bbox_world_min_m` and `bbox_world_max_m` directly to `move_to_pose` with a
+   0.08-0.15 m standoff. Let the driver derive the near-surface clearance point
+   and preserve wrist orientation. Use a short `move_linear` only when its
+   entire path is visibly clear.
 5. Use a short 80-160 step `vla_execute` chunk for the final visual alignment
    and button contact. Re-read official state and fresh images.
 6. Call `task_verification` when visible evidence of the radio state is useful,

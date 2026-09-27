@@ -8,6 +8,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from scipy.spatial.transform import Rotation
+
 from robot.behavior import contracts
 from robot.behavior.r1pro_kinematics import R1ProKinematics
 from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
@@ -52,8 +54,16 @@ class _FakeGateway:
         self.robot_state = {
             "trunk": {"qpos": [1.025, -1.45, -0.47, 0.0]},
             "arms": {
-                "left": {"qpos": [0.0] * 7, "eef_position": [0.0, 0.0, 0.0]},
-                "right": {"qpos": [0.0] * 7, "eef_position": [0.0, 0.0, 0.0]},
+                "left": {
+                    "qpos": [0.0] * 7,
+                    "eef_position": [0.0, 0.0, 0.0],
+                    "eef_orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                },
+                "right": {
+                    "qpos": [0.0] * 7,
+                    "eef_position": [0.0, 0.0, 0.0],
+                    "eef_orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                },
             },
         }
 
@@ -229,9 +239,11 @@ class BehaviorDriverContractTest(unittest.TestCase):
         kinematics = R1ProKinematics(URDF)
         trunk = gateway.robot_state["trunk"]["qpos"]
         for side in ("left", "right"):
-            gateway.robot_state["arms"][side]["eef_position"] = kinematics.forward(
-                side, trunk, [0.0] * 7
-            )[:3, 3].tolist()
+            pose = kinematics.forward(side, trunk, [0.0] * 7)
+            gateway.robot_state["arms"][side]["eef_position"] = pose[:3, 3].tolist()
+            gateway.robot_state["arms"][side]["eef_orientation_xyzw"] = (
+                Rotation.from_matrix(pose[:3, :3]).as_quat().tolist()
+            )
         driver._gateway = gateway
         target_qpos = [-0.1, 0.2, 0.1, -0.3, 0.1, 0.05, -0.1]
         target = kinematics.forward("left", trunk, target_qpos)[:3, 3].tolist()
@@ -245,6 +257,57 @@ class BehaviorDriverContractTest(unittest.TestCase):
         trajectory = gateway.local_trajectory_seen or []
         self.assertGreater(len(trajectory), 1)
         self.assertTrue(all(len(action) == 23 for action in trajectory))
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_bbox_move_to_pose_derives_a_precontact_target(self) -> None:
+        driver = BehaviorR1ProDriver(
+            workspace=self.workspace,
+            listen_port=0,
+            r1pro_urdf_path=URDF,
+        )
+        gateway = _FakeGateway()
+        kinematics = R1ProKinematics(URDF)
+        trunk = gateway.robot_state["trunk"]["qpos"]
+        for side in ("left", "right"):
+            pose = kinematics.forward(side, trunk, [0.0] * 7)
+            gateway.robot_state["arms"][side]["eef_position"] = pose[:3, 3].tolist()
+            gateway.robot_state["arms"][side]["eef_orientation_xyzw"] = (
+                Rotation.from_matrix(pose[:3, :3]).as_quat().tolist()
+            )
+        driver._gateway = gateway
+        left = gateway.robot_state["arms"]["left"]["eef_position"]
+        bbox_min = [left[0] - 0.03, left[1] - 0.03, left[2] - 0.13]
+        bbox_max = [left[0] + 0.03, left[1] + 0.03, left[2] - 0.07]
+
+        result = driver.execute_action(
+            "move_to_pose",
+            {
+                "side": "left",
+                "bbox_world_min_m": bbox_min,
+                "bbox_world_max_m": bbox_max,
+                "standoff_m": 0.08,
+            },
+        )
+
+        self.assertTrue(result.startswith("Move-to-pose execution finished:"), result)
+        self.assertTrue(gateway.local_trajectory_seen)
+
+    def test_bbox_move_requires_both_bounds(self) -> None:
+        self.driver._kinematics = object()
+        result = self.driver.execute_action(
+            "move_to_pose", {"bbox_world_min_m": [0.0, 0.0, 0.0]}
+        )
+        self.assertTrue(result.startswith("Failed:"), result)
+        self.assertIn("bbox_world_min_m and bbox_world_max_m", result)
+
+    def test_direct_position_rejects_bbox_only_standoff(self) -> None:
+        self.driver._kinematics = object()
+        result = self.driver.execute_action(
+            "move_to_pose",
+            {"side": "left", "position_m": [0.4, 0.2, 0.8], "standoff_m": 0.1},
+        )
+        self.assertTrue(result.startswith("Failed:"), result)
+        self.assertIn("valid only with bbox", result)
 
     def test_invalid_configuration_is_rejected_at_construction(self) -> None:
         with self.assertRaises(contracts.ConfigValidationError):
