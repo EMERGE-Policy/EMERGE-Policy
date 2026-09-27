@@ -68,6 +68,7 @@ class RunnerCliTest(unittest.TestCase):
         self.assertTrue(args.headless)
         self.assertFalse(args.show_agent_events)
         self.assertTrue(args.require_perception)
+        self.assertFalse(args.preflight_only)
         self.assertEqual(args.robot_config.name, "behavior_r1pro_openpi.yaml")
         self.assertEqual(args.gateway_port, DEFAULT_GATEWAY_PORT)
         self.assertEqual(args.upstream_port, DEFAULT_OPENPI_PORT)
@@ -105,6 +106,15 @@ class RunnerCliTest(unittest.TestCase):
         ):
             args = parse_args()
         self.assertFalse(args.require_perception)
+
+    def test_preflight_only_is_an_explicit_mode(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            ["eval_behavior_agent.py", "--preflight-only"],
+        ):
+            args = parse_args()
+        self.assertTrue(args.preflight_only)
 
 
 class PerceptionPreflightTest(unittest.TestCase):

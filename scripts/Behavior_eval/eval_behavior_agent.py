@@ -230,6 +230,14 @@ def parse_args() -> argparse.Namespace:
             "an intentional π0.5-only fallback run."
         ),
     )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help=(
+            "Validate environments, checkpoint, provider, perception service, ports, "
+            "and configs, then exit without creating an episode or calling the LLM."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -778,14 +786,23 @@ def main() -> int:
         print(f"EMERGE perception ready: RGB-D geometry + SAM3 at {sam3_url}", flush=True)
     robot_config = require_path(args.robot_config, "R1Pro OpenPI evaluation config")
 
+    assert_port_available(args.upstream_port, label="OpenPI server")
+    assert_port_available(args.gateway_port, label="EMERGE gateway")
+    if args.preflight_only:
+        print(
+            "BEHAVIOR preflight passed: "
+            f"OpenPI={openpi_root}, BEHAVIOR={behavior_root}, "
+            f"checkpoint={checkpoint}, robot_config={robot_config}, "
+            f"ports={args.gateway_port}/{args.upstream_port}.",
+            flush=True,
+        )
+        return 0
+
     output_dir = assert_fresh_output_dir(args.output_dir)
     logs_dir = output_dir / "logs"
     workspace = output_dir / "workspace"
     status_path = workspace / "BEHAVIOR_STATUS.json"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    assert_port_available(args.upstream_port, label="OpenPI server")
-    assert_port_available(args.gateway_port, label="EMERGE gateway")
-
     _prepare_workspace(workspace)
     runtime_environment = dict(os.environ)
     runtime_environment["NO_COLOR"] = "1"

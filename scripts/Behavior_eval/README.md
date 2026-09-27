@@ -54,6 +54,28 @@ configuration, do not assign OpenPI to 8001 or 8002.
 
 ## Run one instance
 
+Keep the SAM3 command below running in one terminal. Before allocating Isaac
+Sim or spending API tokens, run the complete local preflight in a second
+terminal:
+
+```bash
+cd /data/yxy/EMERGE-Humanoid
+
+/home/embodied/miniconda3/envs/phyagentos/bin/python \
+  scripts/Behavior_eval/eval_behavior_agent.py \
+  --driver-config dev/behavior_agent_eval.json \
+  --agent-model gpt-5.6-sol \
+  --preflight-only
+```
+
+`--preflight-only` does not create an episode, start Isaac Sim, or call the
+LLM. A passing result means the provider configuration can be constructed, the
+local SAM3 health endpoint responds, all required repositories and executables
+exist, the checkpoint and robot config exist, and the two runtime ports are
+free.
+
+Then start the real episode with a fresh output directory:
+
 ```bash
 cd /data/yxy/EMERGE-Humanoid
 
