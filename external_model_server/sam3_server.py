@@ -37,29 +37,35 @@ class SAM3InferenceService:
         preload: bool = True,
     ) -> None:
         if backend is None:
-            from external_model_server.sam3_backend import SAM3Backend
+            backend_name = str(config.get("backend", "official"))
+            if backend_name == "official":
+                from external_model_server.sam3_backend import SAM3Backend
 
-            backend = SAM3Backend(config)
+                backend = SAM3Backend(config)
+            elif backend_name == "transformers":
+                from external_model_server.sam3_transformers_backend import (
+                    TransformersSAM3Backend,
+                )
+
+                backend = TransformersSAM3Backend(config)
+            else:
+                raise ValueError("SAM3 backend must be 'official' or 'transformers'")
         self.backend = backend
         self.config = dict(config)
         if preload:
-            self.backend._load_processor(
-                device=str(self.config.get("device", "cuda")).strip().lower(),
-                confidence_threshold=float(
-                    self.config.get("confidence_threshold", 0.5)
-                ),
-                resolution=int(self.config.get("resolution", 1008)),
-            )
+            self.backend.preload()
 
     @property
     def metadata(self) -> dict[str, Any]:
         return {
             "service": "sam3",
+            "backend": str(self.config.get("backend", "official")),
             "model_path": str(self.config.get("model_path", "")),
             "resolution": int(self.config.get("resolution", 1008)),
             "confidence_threshold": float(
                 self.config.get("confidence_threshold", 0.5)
             ),
+            "mask_threshold": float(self.config.get("mask_threshold", 0.5)),
         }
 
     def infer(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -158,10 +164,12 @@ def _serialize_sam3_result(result: Any) -> dict[str, Any]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SAM3 websocket inference server")
     parser.add_argument("--model-path", required=True)
+    parser.add_argument("--backend", choices=("official", "transformers"), default="official")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8002)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--confidence-threshold", type=float, default=0.5)
+    parser.add_argument("--mask-threshold", type=float, default=0.5)
     parser.add_argument("--resolution", type=int, default=1008)
     parser.add_argument("--warmup-prompt", default="object")
     parser.add_argument("--no-warmup", action="store_true")
@@ -178,8 +186,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     config = {
         "model_path": args.model_path,
+        "backend": args.backend,
         "device": args.device,
         "confidence_threshold": args.confidence_threshold,
+        "mask_threshold": args.mask_threshold,
         "resolution": args.resolution,
         "warmup": not args.no_warmup,
         "warmup_prompt": args.warmup_prompt,

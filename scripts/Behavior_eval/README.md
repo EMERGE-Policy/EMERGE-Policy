@@ -154,15 +154,21 @@ SAM3 on its reserved port before the episode:
 
 ```bash
 cd /data/yxy/EMERGE-Humanoid
+SAM3_PYTHON=/home/embodied/zhoukr/robo_age/scripts/sam3/.venv/bin/python \
+SAM3_PYTHONPATH=/home/embodied/.local/lib/python3.10/site-packages \
+SAM3_BACKEND=transformers \
+SAM3_CHECKPOINT=/home/embodied/.cache/modelscope/hub/models/facebook/sam3 \
+SAM3_CONFIDENCE_THRESHOLD=0.3 \
 SAM3_GPU=0 \
   bash scripts/model_server/start_external_model_servers.sh --services sam3
 ```
 
-The existing SAM3 checkpoint on this machine is under
-`/home/embodied/.cache/modelscope/hub/models/facebook/sam3`. TASK-04 wires that
-local checkpoint into the persistent EMERGE server. If SAM3 is absent or
-localization cannot confirm the control, the Agent follows the skill's bounded
-VLA fallback instead of inventing coordinates.
+This reuses the existing local ModelScope checkpoint and the existing isolated
+SAM3 Transformers environment; it does not download or copy model weights. The
+model is loaded once when the websocket server starts and remains resident for
+all localization calls. If SAM3 is absent or localization cannot confirm the
+control, the Agent follows the skill's bounded VLA fallback instead of
+inventing coordinates.
 
 ## Current limits
 

@@ -9,6 +9,8 @@ CONDA_BIN="${CONDA_BIN:-conda}"
 OPENPI_ENV="${OPENPI_ENV:-pi05_server}"
 OPENPI_PYTHON="${OPENPI_PYTHON:-}"
 PERCEPTION_ENV="${PERCEPTION_ENV:-EmergePolicy}"
+SAM3_PYTHON="${SAM3_PYTHON:-}"
+SAM3_PYTHONPATH="${SAM3_PYTHONPATH:-}"
 WAM_ENV="${WAM_ENV:-cosmos-policy}"
 WAM_PYTHON="${WAM_PYTHON:-}"
 PORT_CHECK_PYTHON="${PORT_CHECK_PYTHON:-}"
@@ -35,6 +37,9 @@ SAM3_MAX_BATCH_SIZE="${SAM3_MAX_BATCH_SIZE:-4}"
 SAM3_BATCH_WAIT_MS="${SAM3_BATCH_WAIT_MS:-0}"
 VGGT_CHECKPOINT="${VGGT_CHECKPOINT:-${REPO_ROOT}/checkpoints/vggt/model.pt}"
 SAM3_CHECKPOINT="${SAM3_CHECKPOINT:-${REPO_ROOT}/checkpoints/sam3/model.pt}"
+SAM3_BACKEND="${SAM3_BACKEND:-official}"
+SAM3_CONFIDENCE_THRESHOLD="${SAM3_CONFIDENCE_THRESHOLD:-0.3}"
+SAM3_MASK_THRESHOLD="${SAM3_MASK_THRESHOLD:-0.5}"
 WAM_POLICY_CHECKPOINT="${WAM_POLICY_CHECKPOINT:-${REPO_ROOT}/checkpoints/cosmos-policy/Cosmos-Policy-LIBERO-Predict2-2B.pt}"
 WAM_BASE_MODEL_DIR="${WAM_BASE_MODEL_DIR:-${REPO_ROOT}/checkpoints/cosmos-policy/Cosmos-Predict2-2B-Video2World}"
 WAM_DATASET_STATS="${WAM_DATASET_STATS:-${REPO_ROOT}/checkpoints/cosmos-policy/libero_dataset_statistics.json}"
@@ -91,6 +96,10 @@ OpenPI:
 VGGT and SAM3 runtime:
   PERCEPTION_ENV                Shared Conda environment
                                 (default: EmergePolicy)
+  SAM3_PYTHON                   Direct Python executable for SAM3; bypasses
+                                PERCEPTION_ENV (default: empty)
+  SAM3_PYTHONPATH               Extra import path for the direct SAM3 Python
+                                environment (default: empty)
 
 VGGT:
   VGGT_PORT                     Service port (default: 8001)
@@ -104,8 +113,11 @@ VGGT:
 SAM3:
   SAM3_PORT                     Service port (default: 8002)
   SAM3_GPU                      CUDA_VISIBLE_DEVICES (default: 2)
-  SAM3_CHECKPOINT               Model file
+  SAM3_CHECKPOINT               Model file or Transformers checkpoint directory
                                 (default: <repo>/checkpoints/sam3/model.pt)
+  SAM3_BACKEND                  official or transformers (default: official)
+  SAM3_CONFIDENCE_THRESHOLD     Detection threshold (default: 0.3)
+  SAM3_MASK_THRESHOLD           Pixel mask threshold (default: 0.5)
   SAM3_MAX_BATCH_SIZE           Maximum requests per batch (default: 4)
   SAM3_BATCH_WAIT_MS            Maximum batch collection time in ms
                                 (default: 0)
@@ -395,6 +407,7 @@ if service_enabled vggt; then
 fi
 if service_enabled sam3; then
     check_port "SAM3" "${SAM3_PORT}"
+    require_path "SAM3 checkpoint" "${SAM3_CHECKPOINT}"
 fi
 if service_enabled cosmos; then
     check_port "Cosmos WAM" "${WAM_PORT}"
@@ -446,15 +459,38 @@ if service_enabled vggt; then
 fi
 
 if service_enabled sam3; then
-    start_server \
-        "SAM3 server :${SAM3_PORT}" \
-        "${PERCEPTION_ENV}" \
-        "${SAM3_GPU}" \
-        python -m external_model_server.sam3_server \
-        --model-path "${SAM3_CHECKPOINT}" \
-        --port "${SAM3_PORT}" \
-        --max-batch-size "${SAM3_MAX_BATCH_SIZE}" \
+    sam3_python_command=(
+        "${SAM3_PYTHON:-python}"
+        -m external_model_server.sam3_server
+        --model-path "${SAM3_CHECKPOINT}"
+        --backend "${SAM3_BACKEND}"
+        --confidence-threshold "${SAM3_CONFIDENCE_THRESHOLD}"
+        --mask-threshold "${SAM3_MASK_THRESHOLD}"
+        --port "${SAM3_PORT}"
+        --max-batch-size "${SAM3_MAX_BATCH_SIZE}"
         --batch-wait-ms "${SAM3_BATCH_WAIT_MS}"
+    )
+    if [[ -n "${SAM3_PYTHONPATH}" ]]; then
+        sam3_command=(
+            env "PYTHONPATH=${REPO_ROOT}:${SAM3_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"
+            "${sam3_python_command[@]}"
+        )
+    else
+        sam3_command=("${sam3_python_command[@]}")
+    fi
+    if [[ -n "${SAM3_PYTHON}" ]]; then
+        start_server_with_python \
+            "SAM3 server :${SAM3_PORT}" \
+            "${SAM3_PYTHON}" \
+            "${SAM3_GPU}" \
+            "${sam3_command[@]}"
+    else
+        start_server \
+            "SAM3 server :${SAM3_PORT}" \
+            "${PERCEPTION_ENV}" \
+            "${SAM3_GPU}" \
+            "${sam3_command[@]}"
+    fi
 fi
 
 if service_enabled cosmos; then

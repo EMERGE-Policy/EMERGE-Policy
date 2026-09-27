@@ -77,6 +77,13 @@ class SAM3Backend:
         self._transform: Any | None = None
         self._postprocessor: Any | None = None
 
+    def preload(self) -> None:
+        self._load_processor(
+            device=str(self.config.get("device", "cuda")).strip().lower(),
+            confidence_threshold=float(self.config.get("confidence_threshold", 0.5)),
+            resolution=int(self.config.get("resolution", 1008)),
+        )
+
     def segment_view(
         self,
         rgb: np.ndarray,
