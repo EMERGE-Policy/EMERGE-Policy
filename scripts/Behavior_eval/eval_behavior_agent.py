@@ -27,6 +27,7 @@ if str(EMERGE_ROOT) not in sys.path:
     sys.path.insert(0, str(EMERGE_ROOT))
 
 from robot.behavior.contracts import (  # noqa: E402
+    EVALUATION_STATUS_SCHEMA,
     OFFICIAL_PROMPT,
     TASK_NAME,
     agent_exit_code,
@@ -62,6 +63,7 @@ from Emerge.utils.action_queue import (  # noqa: E402
 from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
 
 DEFAULT_DRIVER_CONFIG = EMERGE_ROOT / "dev/behavior_agent_eval.json"
+DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -131,6 +133,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_DRIVER_CONFIG,
         help="Base configuration for the native behavior_r1pro driver.",
+    )
+    parser.add_argument(
+        "--robot-config",
+        type=Path,
+        default=DEFAULT_ROBOT_CONFIG,
+        help=(
+            "R1Pro evaluator config whose runtime robot name matches the public OpenPI "
+            "checkpoint observation keys."
+        ),
     )
     parser.add_argument("--agent-max-iterations", type=int, default=20)
     parser.add_argument(
@@ -262,6 +273,142 @@ def _episode_driver_config(
     path = output_dir / "driver_config.json"
     atomic_write_json(path, normalized)
     return path
+
+
+def _write_running_evaluation_status(status_path: Path) -> dict[str, Any]:
+    """Publish EMERGE's live view of an official evaluator that is running.
+
+    BEHAVIOR 3.9.3 writes its authoritative metrics only when the rollout
+    finishes.  The gateway connection is the live readiness signal; this file
+    gives the Agent a stable episode contract while the evaluator is blocked at
+    the controlled gateway waiting for an action budget.
+    """
+    status = {
+        "schema_version": EVALUATION_STATUS_SCHEMA,
+        "source": "emerge_supervisor",
+        "task": TASK_NAME,
+        "rollout_id": 0,
+        "phase": "running",
+        "steps": 0,
+        "success": False,
+        "done": False,
+    }
+    atomic_write_json(status_path, status)
+    return status
+
+
+def _read_official_result(output_dir: Path) -> tuple[Path, dict[str, Any]]:
+    """Read the single result emitted by the official BEHAVIOR evaluator."""
+    result_paths = sorted((output_dir / "json").glob(f"{TASK_NAME}_*_0.json"))
+    if len(result_paths) != 1:
+        raise RuntimeError(
+            "expected exactly one official BEHAVIOR result for the single-instance run, "
+            f"found {len(result_paths)} under {output_dir / 'json'}"
+        )
+    result_path = result_paths[0].resolve()
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"official BEHAVIOR result is unreadable: {result_path}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"official BEHAVIOR result must be a JSON object: {result_path}")
+    required = {"task", "instance_id", "rollout_id", "steps", "success"}
+    missing = sorted(required.difference(result))
+    if missing:
+        raise RuntimeError(
+            f"official BEHAVIOR result is missing {', '.join(missing)}: {result_path}"
+        )
+    if str(result["task"]) != TASK_NAME or int(result["rollout_id"]) != 0:
+        raise RuntimeError(
+            f"official BEHAVIOR result does not match this run: {result_path}"
+        )
+    if not isinstance(result["success"], bool):
+        raise RuntimeError(f"official BEHAVIOR success must be a boolean: {result_path}")
+    return result_path, result
+
+
+def _write_completed_evaluation_status(
+    output_dir: Path,
+    status_path: Path,
+) -> dict[str, Any]:
+    """Translate the official final result into the Agent's episode contract."""
+    result_path, result = _read_official_result(output_dir)
+    q_score = result.get("q_score")
+    if isinstance(q_score, dict):
+        q_score = q_score.get("final")
+    status = {
+        "schema_version": EVALUATION_STATUS_SCHEMA,
+        "source": "official_result",
+        "task": TASK_NAME,
+        "instance_id": int(result["instance_id"]),
+        "rollout_id": int(result["rollout_id"]),
+        "phase": "completed",
+        "steps": int(result["steps"]),
+        "success": result["success"],
+        "done": True,
+        "termination_reason": "official_evaluator_completed",
+        "result_path": str(result_path),
+        "q_score": q_score,
+    }
+    atomic_write_json(status_path, status)
+    return status
+
+
+def _write_evaluator_error_status(status_path: Path, detail: str) -> dict[str, Any]:
+    status = {
+        "schema_version": EVALUATION_STATUS_SCHEMA,
+        "source": "emerge_supervisor",
+        "task": TASK_NAME,
+        "rollout_id": 0,
+        "phase": "error",
+        "success": False,
+        "done": True,
+        "termination_reason": "evaluator_error",
+        "error": str(detail),
+    }
+    atomic_write_json(status_path, status)
+    return status
+
+
+def _evaluator_command(
+    *,
+    behavior_python: Path,
+    robot_config: Path,
+    gateway_port: int,
+    instance_index: int,
+    max_steps: int,
+    output_dir: Path,
+    write_video: bool,
+    headless: bool,
+) -> list[str]:
+    """Build the stock BEHAVIOR 3.9.3 single-environment command."""
+    return [
+        str(behavior_python),
+        "-m",
+        "omnigibson.eval.eval",
+        "--task-name",
+        TASK_NAME,
+        "--robot-config",
+        str(robot_config),
+        "--mode",
+        "public_test",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(gateway_port),
+        "--instance-indices",
+        str(instance_index),
+        "--num-envs",
+        "1",
+        "--replay-action-chunk-size",
+        "0",
+        "--max-steps",
+        str(max_steps),
+        "--output-dir",
+        str(output_dir),
+        "--write-video" if write_video else "--no-write-video",
+        "--headless" if headless else "--no-headless",
+    ]
 
 
 def _agent_message(max_action_steps: int) -> str:
@@ -555,10 +702,7 @@ def main() -> int:
     base_driver_config = _load_driver_config(args.driver_config)
     agent_model = _validate_agent_provider(args)
     print(f"EMERGE Agent provider ready for model: {agent_model}", flush=True)
-    robot_config = require_path(
-        behavior_root / "OmniGibson/omnigibson/eval/r1pro_openpi.yaml",
-        "R1Pro evaluation config",
-    )
+    robot_config = require_path(args.robot_config, "R1Pro OpenPI evaluation config")
 
     output_dir = assert_fresh_output_dir(args.output_dir)
     logs_dir = output_dir / "logs"
@@ -650,31 +794,16 @@ def main() -> int:
             print(f"Starting EMERGE Controller; log: {logs_dir / 'controller.log'}", flush=True)
             wait_for_health(args.gateway_port, controller, 30.0, label="EMERGE Controller")
 
-            evaluator_command = [
-                str(behavior_python),
-                "-m",
-                "omnigibson.eval.eval",
-                "--task-name",
-                "turning_on_radio",
-                "--robot-config",
-                str(robot_config),
-                "--mode",
-                "public_test",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(args.gateway_port),
-                "--instance-indices",
-                str(args.instance_index),
-                "--max-steps",
-                str(args.max_steps),
-                "--output-dir",
-                str(output_dir),
-                "--status-file",
-                str(status_path),
-                "--write-video" if args.write_video else "--no-write-video",
-                "--headless" if args.headless else "--no-headless",
-            ]
+            evaluator_command = _evaluator_command(
+                behavior_python=behavior_python,
+                robot_config=robot_config,
+                gateway_port=args.gateway_port,
+                instance_index=args.instance_index,
+                max_steps=args.max_steps,
+                output_dir=output_dir,
+                write_video=args.write_video,
+                headless=args.headless,
+            )
             evaluator = spawn_process(
                 evaluator_command,
                 cwd=behavior_root / "OmniGibson",
@@ -689,12 +818,7 @@ def main() -> int:
                 label="the BEHAVIOR evaluator to connect to the controlled gateway",
                 processes=[controller, evaluator],
             )
-            wait_for_condition(
-                lambda: bool(read_json(status_path)),
-                timeout_s=args.startup_timeout,
-                label="the first official evaluator status frame",
-                processes=[controller, evaluator],
-            )
+            _write_running_evaluation_status(status_path)
 
             session_id = f"cli:behavior-turning-on-radio-{uuid.uuid4().hex}"
             agent = _start_agent(
@@ -713,25 +837,22 @@ def main() -> int:
                 if args.show_agent_events:
                     _drain_agent_events(agent)
                 status = read_json(status_path)
-                if status.get("done"):
-                    try:
-                        evaluator.wait(timeout=120.0)
-                    except subprocess.TimeoutExpired:
-                        infrastructure_error = "evaluator_finalize_timeout"
-                        termination_reason = "evaluator_finalize_timeout"
-                        break
-                    evaluator_code = evaluator.returncode
-                    status = read_json(status_path)
-                    termination_reason = str(status.get("termination_reason") or "evaluator_done")
-                    if evaluator_code not in (0, None):
-                        infrastructure_error = f"evaluator_exit_{evaluator_code}"
-                    _settle_agent(agent, agent_results)
-                    break
                 if evaluator.poll() is not None:
                     evaluator_code = evaluator.returncode
-                    termination_reason = f"evaluator_exit_{evaluator_code}"
-                    if evaluator_code != 0:
+                    if evaluator_code == 0:
+                        try:
+                            status = _write_completed_evaluation_status(output_dir, status_path)
+                            termination_reason = str(
+                                status.get("termination_reason") or "evaluator_done"
+                            )
+                        except Exception as exc:
+                            infrastructure_error = f"official_result_error: {exc}"
+                            termination_reason = "official_result_error"
+                            _write_evaluator_error_status(status_path, infrastructure_error)
+                    else:
+                        termination_reason = f"evaluator_exit_{evaluator_code}"
                         infrastructure_error = termination_reason
+                        _write_evaluator_error_status(status_path, infrastructure_error)
                     _settle_agent(agent, agent_results, timeout_s=5.0)
                     break
                 if controller.poll() is not None:

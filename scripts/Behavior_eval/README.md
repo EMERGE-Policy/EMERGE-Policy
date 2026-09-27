@@ -19,6 +19,7 @@ robot and the official single-task π0.5 checkpoint.
 | `robot/behavior/` | BEHAVIOR websocket protocol, status contract, and observation publishing. |
 | `robot/profiles/behavior_r1pro.md` | Controller-installed robot profile. |
 | `dev/behavior_agent_eval.json` | Checked-in base driver configuration. |
+| `dev/behavior_r1pro_openpi.yaml` | Reproducible v3.9.3 R1Pro evaluator config using the observation-key name expected by the public π0.5 checkpoint. |
 
 BEHAVIOR is no longer an external EMERGE plugin. The native driver is
 registered as `behavior_r1pro` in `robot/drivers/__init__.py`; no plugin home or
@@ -75,7 +76,10 @@ available, and is not written by EMERGE.
 
 The Agent chooses every action through `execute_robot_action`; the runner does
 not enqueue actions on its behalf. The official result remains authoritative:
-`step_completed` only means that a requested action budget was consumed.
+`step_completed` only means that a requested action budget was consumed. During
+the rollout, EMERGE maintains the live episode state from its controlled
+websocket gateway. At completion it reads the result JSON written by the stock
+BEHAVIOR evaluator; that official JSON remains the source of success and score.
 
 Logs are written under `<output-dir>/logs/`. The durable episode summary is
 `<output-dir>/agent_episode_result.json`; official BEHAVIOR JSON and videos are
@@ -104,11 +108,18 @@ Verify a finished episode using only its artifacts:
 
 ## External BEHAVIOR requirements
 
-The local BEHAVIOR checkout must provide:
+The local BEHAVIOR checkout must be the unmodified official `v3.9.3` release and
+provide:
 
-- `OmniGibson/omnigibson/eval/eval.py` with `--status-file` support and
-  `behavior.eval_status.v1` status updates.
-- `OmniGibson/omnigibson/eval/r1pro_openpi.yaml`.
+- `OmniGibson/omnigibson/eval/eval.py` with the `BatchedEvaluator` entrypoint.
+- the standard R1Pro assets and controllers used by the bundled evaluator.
+
+The runner uses `--num-envs 1` and disables optional client-side action-chunk
+replay so that each gateway permit still corresponds to one simulator action.
+It does not require patches or additional files in the BEHAVIOR repository.
+The checked-in `dev/behavior_r1pro_openpi.yaml` copies the official v3.9.3 R1Pro
+settings but names the runtime robot `robot`, because the public OpenPI wrapper
+was trained against `robot::proprio` and `robot::robot:...` observation keys.
 
 The runner removes inherited `ISAAC_PATH`, `ISAACSIM_PATH`, `EXP_PATH`, and
 `CARB_APP_PATH` only for the evaluator subprocess, allowing the Isaac Sim

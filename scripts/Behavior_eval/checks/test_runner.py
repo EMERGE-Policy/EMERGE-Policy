@@ -24,8 +24,12 @@ from scripts.Behavior_eval.checks import verify_artifacts
 from scripts.Behavior_eval.eval_behavior_agent import (
     _actions_settled,
     _episode_driver_config,
+    _evaluator_command,
     _prepare_workspace,
+    _read_official_result,
     _resume_decision,
+    _write_completed_evaluation_status,
+    _write_running_evaluation_status,
     parse_args,
 )
 from scripts.Behavior_eval.runner_common import (
@@ -61,6 +65,7 @@ class RunnerCliTest(unittest.TestCase):
         self.assertEqual(args.max_steps, 6000)
         self.assertTrue(args.headless)
         self.assertFalse(args.show_agent_events)
+        self.assertEqual(args.robot_config.name, "behavior_r1pro_openpi.yaml")
 
     def test_native_config_name_and_live_options_are_accepted(self) -> None:
         with patch.object(
@@ -213,6 +218,112 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             DRIVER_REGISTRY["behavior_r1pro"],
             "robot.drivers.behavior_r1pro_driver.BehaviorR1ProDriver",
         )
+
+    def test_evaluator_command_targets_stock_behavior_393(self) -> None:
+        command = _evaluator_command(
+            behavior_python=Path("/env/bin/python"),
+            robot_config=Path("/checkout/OmniGibson/omnigibson/eval/r1pro.yaml"),
+            gateway_port=8124,
+            instance_index=3,
+            max_steps=6000,
+            output_dir=Path("/tmp/episode"),
+            write_video=True,
+            headless=False,
+        )
+        self.assertNotIn("--status-file", command)
+        self.assertEqual(command[command.index("--num-envs") + 1], "1")
+        self.assertEqual(command[command.index("--replay-action-chunk-size") + 1], "0")
+        self.assertEqual(command[command.index("--instance-indices") + 1], "3")
+        self.assertEqual(command[command.index("--max-steps") + 1], "6000")
+        self.assertIn("/checkout/OmniGibson/omnigibson/eval/r1pro.yaml", command)
+        self.assertIn("--write-video", command)
+        self.assertIn("--no-headless", command)
+
+    def test_openpi_robot_config_exposes_the_checkpoint_observation_names(self) -> None:
+        import yaml
+
+        config_path = Path(__file__).resolve().parents[3] / "dev/behavior_r1pro_openpi.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(config["model"], "r1pro")
+        self.assertEqual(config["name"], "robot")
+        self.assertEqual(
+            config["eval"]["camera_sensor_names"],
+            {
+                "left_wrist": "robot:left_realsense_link:Camera:0",
+                "right_wrist": "robot:right_realsense_link:Camera:0",
+                "head": "robot:zed_link:Camera:0",
+            },
+        )
+
+
+class OfficialResultBridgeTest(unittest.TestCase):
+    def _write_result(self, root: Path, **overrides) -> Path:
+        result = {
+            "task": contracts.TASK_NAME,
+            "instance_id": 301,
+            "rollout_id": 0,
+            "steps": 6001,
+            "success": False,
+            "q_score": {"final": 0.25},
+        }
+        result.update(overrides)
+        path = root / "json/turning_on_radio_301_0.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(result), encoding="utf-8")
+        return path
+
+    def test_running_status_is_owned_by_emerge_and_not_final(self) -> None:
+        with TemporaryDirectory() as temporary:
+            status_path = Path(temporary) / "workspace/BEHAVIOR_STATUS.json"
+            status = _write_running_evaluation_status(status_path)
+            self.assertEqual(status["source"], "emerge_supervisor")
+            self.assertEqual(status["phase"], "running")
+            self.assertFalse(status["done"])
+            self.assertEqual(read_json(status_path), status)
+
+    def test_official_result_becomes_the_final_episode_status(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result_path = self._write_result(root, success=True)
+            status_path = root / "workspace/BEHAVIOR_STATUS.json"
+            status = _write_completed_evaluation_status(root, status_path)
+            self.assertEqual(status["source"], "official_result")
+            self.assertEqual(status["instance_id"], 301)
+            self.assertEqual(status["steps"], 6001)
+            self.assertTrue(status["success"])
+            self.assertTrue(status["done"])
+            self.assertEqual(status["q_score"], 0.25)
+            self.assertEqual(status["result_path"], str(result_path.resolve()))
+            self.assertEqual(read_json(status_path), status)
+
+    def test_missing_or_ambiguous_result_is_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaises(RuntimeError):
+                _read_official_result(root)
+            self._write_result(root)
+            second = root / "json/turning_on_radio_302_0.json"
+            second.write_text(
+                json.dumps(
+                    {
+                        "task": contracts.TASK_NAME,
+                        "instance_id": 302,
+                        "rollout_id": 0,
+                        "steps": 1,
+                        "success": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(RuntimeError):
+                _read_official_result(root)
+
+    def test_mismatched_or_invalid_official_result_is_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_result(root, task="storing_food")
+            with self.assertRaises(RuntimeError):
+                _read_official_result(root)
 
 
 class EpisodeVerdictTest(unittest.TestCase):

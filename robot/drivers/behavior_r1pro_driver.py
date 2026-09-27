@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -328,10 +329,22 @@ class BehaviorR1ProDriver(BaseDriver):
             self._gateway.publish_observation()
             return True, self._applied_steps_from_status()
 
-        try:
-            evaluation = self._read_evaluation()
-        except contracts.EvaluationValidationError:
-            return False, None
+        # BEHAVIOR 3.9.3 writes the official result after its websocket closes.
+        # Give the runner a short window to translate that result into the
+        # episode status before declaring the final action unsynchronized.
+        evaluation = None
+        status = str(result.get("status") or "")
+        status_deadline = time.monotonic() + min(2.0, self._state_sync_timeout_s)
+        while True:
+            try:
+                evaluation = self._read_evaluation()
+            except contracts.EvaluationValidationError:
+                return False, None
+            if contracts.episode_terminated(evaluation):
+                break
+            if status != EPISODE_FINISHED or time.monotonic() >= status_deadline:
+                break
+            time.sleep(0.05)
         if evaluation is None:
             return False, None
         applied = _int_or_none(evaluation.get("steps"))
