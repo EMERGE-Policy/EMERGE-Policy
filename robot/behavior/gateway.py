@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import http
 import logging
+import math
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -60,6 +61,8 @@ class GatewayStats:
     total_connections: int = 0
     requests_forwarded: int = 0
     responses_forwarded: int = 0
+    local_actions_generated: int = 0
+    upstream_resets_sent: int = 0
     last_error: str | None = None
     started_at_monotonic: float | None = None
 
@@ -69,6 +72,8 @@ class ExecutionState:
     execution_id: int
     instruction: str
     requested_steps: int
+    mode: str = "vla"
+    local_action_count: int = 0
     completed_steps: int = 0
     status: str = EXECUTING
     detail: str | None = None
@@ -97,13 +102,14 @@ class B1KProxyGateway:
     def __init__(
         self,
         *,
-        upstream_url: str = "ws://127.0.0.1:8001",
+        upstream_url: str = "ws://127.0.0.1:8011",
         listen_host: str = "127.0.0.1",
         listen_port: int = 8000,
         upstream_open_timeout_s: float = 10.0,
         controlled: bool = False,
         observation_workspace: str | Path | None = None,
         observation_publish_interval: int = 5,
+        camera_calibration: dict[str, Any] | None = None,
     ) -> None:
         self.upstream_url = str(upstream_url)
         self.listen_host = str(listen_host)
@@ -114,6 +120,7 @@ class B1KProxyGateway:
             ObservationPublisher(
                 observation_workspace,
                 publish_interval=observation_publish_interval,
+                camera_calibration=camera_calibration,
             )
             if observation_workspace is not None
             else None
@@ -126,6 +133,7 @@ class B1KProxyGateway:
         self._stats_lock = threading.Lock()
         self._execution_condition = threading.Condition()
         self._execution: ExecutionState | None = None
+        self._local_action_sequence: list[list[float]] = []
         self._execution_serial = 0
         self._orphaned_responses = 0
         self._episode_id = 0
@@ -134,6 +142,7 @@ class B1KProxyGateway:
         self._last_disconnect: str | None = None
         self._evaluator_connected = False
         self._upstream_connected = False
+        self._upstream_needs_reset = False
         self._stopped_cleanly = True
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -168,6 +177,7 @@ class B1KProxyGateway:
                     "orphaned_responses": self._orphaned_responses,
                     "evaluator_connected": self._evaluator_connected,
                     "upstream_connected": self._upstream_connected,
+                    "upstream_needs_reset": self._upstream_needs_reset,
                     "stopped_cleanly": self._stopped_cleanly,
                     "execution": asdict(self._execution) if self._execution else None,
                 }
@@ -212,6 +222,66 @@ class B1KProxyGateway:
             )
             self._execution_condition.notify_all()
             return self._execution_serial
+
+    def begin_local_execution(
+        self,
+        label: str,
+        requested_steps: int,
+        action: list[float],
+        *,
+        baseline_evaluator_steps: int | None = None,
+    ) -> int:
+        """Execute a fixed official R1Pro action without querying OpenPI."""
+        if requested_steps < 1:
+            raise ValueError("requested_steps must be positive")
+        return self.begin_local_trajectory(
+            label,
+            [action for _ in range(int(requested_steps))],
+            baseline_evaluator_steps=baseline_evaluator_steps,
+        )
+
+    def begin_local_trajectory(
+        self,
+        label: str,
+        actions: list[list[float]],
+        *,
+        baseline_evaluator_steps: int | None = None,
+    ) -> int:
+        """Execute an explicit sequence of official 23-D R1Pro actions."""
+        if not actions:
+            raise ValueError("local R1Pro trajectory must contain at least one action")
+        normalized_actions = [_validate_local_action(action) for action in actions]
+        with self._execution_condition:
+            if self._execution is not None and self._execution.status == EXECUTING:
+                raise RuntimeError("Another robot execution is already active")
+            if self._orphaned_responses:
+                raise RuntimeError(
+                    "cannot start a local action while an OpenPI reply is still in flight"
+                )
+            self._execution_serial += 1
+            self._execution = ExecutionState(
+                execution_id=self._execution_serial,
+                instruction=str(label),
+                requested_steps=len(normalized_actions),
+                mode="local",
+                local_action_count=len(normalized_actions),
+                baseline_evaluator_steps=baseline_evaluator_steps,
+            )
+            self._local_action_sequence = normalized_actions
+            self._execution_condition.notify_all()
+            return self._execution_serial
+
+    def current_hold_action(self) -> list[float]:
+        publisher = self._observation_publisher
+        if publisher is None:
+            raise RuntimeError("observation publishing is disabled")
+        return publisher.current_hold_action()
+
+    def current_robot_state(self) -> dict[str, Any]:
+        publisher = self._observation_publisher
+        if publisher is None:
+            raise RuntimeError("observation publishing is disabled")
+        return publisher.current_robot_state()
 
     def wait_for_execution(
         self,
@@ -561,9 +631,29 @@ class B1KProxyGateway:
                     self._record_reset()
                 if request_direction and not is_reset and self._observation_publisher is not None:
                     self._observation_publisher.capture(message)
+                dispatch = None
                 if request_direction and not is_reset and self.controlled:
-                    if not await self._await_request_permission(source, connection_serial):
+                    dispatch = await self._await_request_permission(source, connection_serial)
+                    if dispatch is False:
                         return
+                if request_direction and not is_reset and dispatch is not None:
+                    mode, local_action = dispatch
+                    if mode == "local":
+                        await source.send(_pack_action_response(local_action))
+                        with self._execution_condition:
+                            self._upstream_needs_reset = True
+                            self._execution_condition.notify_all()
+                        with self._stats_lock:
+                            self._stats.local_actions_generated += 1
+                            self._stats.responses_forwarded += 1
+                        execution_finished = self._record_action_response(connection_serial)
+                        if execution_finished and self._observation_publisher is not None:
+                            self._observation_publisher.publish_latest()
+                        continue
+                    if self._consume_upstream_reset_needed():
+                        await destination.send(_pack_reset_request())
+                        with self._stats_lock:
+                            self._stats.upstream_resets_sent += 1
                 await destination.send(message)
                 with self._stats_lock:
                     if request_direction:
@@ -582,11 +672,13 @@ class B1KProxyGateway:
         # only other way out of this coroutine is the explicit ``return`` above.
         self._note_disconnect(direction, "stream ended")
 
-    async def _await_request_permission(self, downstream: Any, connection_serial: int) -> bool:
+    async def _await_request_permission(
+        self, downstream: Any, connection_serial: int
+    ) -> tuple[str, list[float] | None] | bool:
         while True:
             reserved = self._reserve_request_slot(connection_serial)
-            if reserved is True:
-                return True
+            if isinstance(reserved, tuple):
+                return reserved
             with self._execution_condition:
                 if not self._evaluator_connected:
                     return False
@@ -596,12 +688,14 @@ class B1KProxyGateway:
                 return False
             await asyncio.sleep(0.05)
 
-    def _reserve_request_slot(self, connection_serial: int) -> bool | None:
+    def _reserve_request_slot(
+        self, connection_serial: int
+    ) -> tuple[str, list[float] | None] | bool | None:
         """Atomically confirm an active execution and count a forwarded request.
 
-        Returns ``True`` when the request may be forwarded, ``None`` when there
-        is no active execution, and ``False`` when the active execution belongs
-        to a different evaluator connection.
+        Returns the execution mode and optional local action when the request
+        may run, ``None`` when there is no active execution, and ``False`` when
+        the active execution belongs to a different evaluator connection.
         """
         with self._execution_condition:
             execution = self._execution
@@ -611,9 +705,14 @@ class B1KProxyGateway:
                 execution.connection_serial = connection_serial
             elif execution.connection_serial != connection_serial:
                 return False
+            local_action = None
+            if execution.mode == "local":
+                if execution.requests_sent >= len(self._local_action_sequence):
+                    raise RuntimeError("local R1Pro trajectory was exhausted unexpectedly")
+                local_action = self._local_action_sequence[execution.requests_sent]
             execution.requests_sent += 1
             self._execution_condition.notify_all()
-            return True
+            return execution.mode, local_action
 
     def _record_action_response(self, connection_serial: int) -> bool:
         if not self.controlled:
@@ -646,6 +745,8 @@ class B1KProxyGateway:
     def _record_reset(self) -> None:
         with self._execution_condition:
             self._episode_id += 1
+            # This same evaluator reset message is forwarded to OpenPI.
+            self._upstream_needs_reset = False
             execution = self._execution
             if (
                 execution is not None
@@ -658,6 +759,14 @@ class B1KProxyGateway:
             self._execution_condition.notify_all()
         if self._observation_publisher is not None:
             self._observation_publisher.note_reset()
+
+    def _consume_upstream_reset_needed(self) -> bool:
+        with self._execution_condition:
+            if not self._upstream_needs_reset:
+                return False
+            self._upstream_needs_reset = False
+            self._execution_condition.notify_all()
+            return True
 
     # ------------------------------------------------------------------ #
     # Retirement bookkeeping
@@ -713,6 +822,45 @@ def _is_reset_message(message: Any) -> bool:
     return isinstance(payload, dict) and payload.get("reset") is True
 
 
+def _pack_action_response(action: list[float] | None) -> bytes:
+    if action is None:
+        raise RuntimeError("local execution has no action payload")
+    import msgpack
+    import numpy as np
+
+    array = np.asarray(action, dtype=np.float32)[None, :]
+
+    def pack_array(value: Any) -> dict[bytes, Any]:
+        if isinstance(value, np.ndarray):
+            return {
+                b"__ndarray__": True,
+                b"data": value.tobytes(),
+                b"dtype": value.dtype.str,
+                b"shape": value.shape,
+            }
+        raise TypeError(f"cannot pack {type(value).__name__}")
+
+    return msgpack.packb({"action": array}, default=pack_array)
+
+
+def _pack_reset_request() -> bytes:
+    import msgpack
+
+    return msgpack.packb({"reset": True})
+
+
+def _validate_local_action(action: list[float]) -> list[float]:
+    if len(action) != 23:
+        raise ValueError(f"local R1Pro action must have 23 values, got {len(action)}")
+    try:
+        normalized = [float(value) for value in action]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("local R1Pro action must contain numbers") from exc
+    if not all(math.isfinite(value) for value in normalized):
+        raise ValueError("local R1Pro action must contain finite values")
+    return normalized
+
+
 def _health_check(connection: Any, request: Any) -> Any | None:
     if request.path == "/healthz":
         return connection.respond(http.HTTPStatus.OK, "OK\n")
@@ -721,7 +869,7 @@ def _health_check(connection: Any, request: Any) -> Any | None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--upstream-url", default="ws://127.0.0.1:8001")
+    parser.add_argument("--upstream-url", default="ws://127.0.0.1:8011")
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=8000)
     parser.add_argument("--upstream-open-timeout", type=float, default=10.0)

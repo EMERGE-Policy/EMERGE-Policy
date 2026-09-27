@@ -9,9 +9,14 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from robot.behavior import contracts
+from robot.behavior.r1pro_kinematics import R1ProKinematics
 from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
 
 PROMPT = contracts.OFFICIAL_PROMPT
+URDF = (
+    Path(__file__).resolve().parents[3].parent
+    / "BEHAVIOR-1K/datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf"
+)
 
 
 class _FakeGateway:
@@ -41,6 +46,16 @@ class _FakeGateway:
         self.stopped = False
         self.baseline_seen: int | None = None
         self.wait_hook: Any | None = None
+        self.hold_action = [0.0] * 23
+        self.local_action_seen: list[float] | None = None
+        self.local_trajectory_seen: list[list[float]] | None = None
+        self.robot_state = {
+            "trunk": {"qpos": [1.025, -1.45, -0.47, 0.0]},
+            "arms": {
+                "left": {"qpos": [0.0] * 7, "eef_position": [0.0, 0.0, 0.0]},
+                "right": {"qpos": [0.0] * 7, "eef_position": [0.0, 0.0, 0.0]},
+            },
+        }
 
     def start(self, **_kwargs: Any) -> None:
         self.started = True
@@ -68,6 +83,36 @@ class _FakeGateway:
             "baseline_evaluator_steps": baseline_evaluator_steps,
         }
         return 1
+
+    def current_hold_action(self) -> list[float]:
+        return list(self.hold_action)
+
+    def begin_local_execution(
+        self,
+        label: str,
+        requested_steps: int,
+        action: list[float],
+        *,
+        baseline_evaluator_steps=None,
+    ) -> int:
+        self.local_action_seen = list(action)
+        return self.begin_execution(
+            label,
+            requested_steps,
+            baseline_evaluator_steps=baseline_evaluator_steps,
+        )
+
+    def current_robot_state(self) -> dict[str, Any]:
+        return self.robot_state
+
+    def begin_local_trajectory(
+        self, label: str, actions: list[list[float]], *, baseline_evaluator_steps=None
+    ) -> int:
+        self.local_trajectory_seen = actions
+        self.execution["completed_steps"] = len(actions)
+        return self.begin_execution(
+            label, len(actions), baseline_evaluator_steps=baseline_evaluator_steps
+        )
 
     def wait_for_execution(self, execution_id: int, **_kwargs: Any) -> dict[str, Any]:
         if self.wait_hook is not None:
@@ -154,7 +199,52 @@ class BehaviorDriverContractTest(unittest.TestCase):
         self.assertFalse(self._run({"instruction": PROMPT, "step": "5"}).startswith("Failed:"))
 
     def test_unknown_action_type_is_reported(self) -> None:
-        self.assertIn("Unknown action type", self.driver.execute_action("move_to_pose", {}))
+        self.assertIn("Unknown action type", self.driver.execute_action("follow_arc", {}))
+
+    def test_hold_position_uses_the_gateway_local_action(self) -> None:
+        result = self.driver.execute_action("hold_position", {"step": 2})
+        self.assertTrue(result.startswith("Hold execution finished:"))
+        self.assertEqual(self.gateway.local_action_seen, [0.0] * 23)
+
+    def test_hold_position_rejects_unknown_parameters(self) -> None:
+        result = self.driver.execute_action("hold_position", {"step": 1, "pose": []})
+        self.assertTrue(result.startswith("Failed:"))
+        self.assertIn("unknown parameters", result)
+
+    def test_primitive_requires_the_official_urdf_configuration(self) -> None:
+        result = self.driver.execute_action(
+            "move_to_pose", {"side": "left", "position_m": [0.0, 0.0, 1.0]}
+        )
+        self.assertTrue(result.startswith("Failed:"))
+        self.assertIn("r1pro_urdf_path", result)
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_move_to_pose_dispatches_a_bounded_local_trajectory(self) -> None:
+        driver = BehaviorR1ProDriver(
+            workspace=self.workspace,
+            listen_port=0,
+            r1pro_urdf_path=URDF,
+        )
+        gateway = _FakeGateway()
+        kinematics = R1ProKinematics(URDF)
+        trunk = gateway.robot_state["trunk"]["qpos"]
+        for side in ("left", "right"):
+            gateway.robot_state["arms"][side]["eef_position"] = kinematics.forward(
+                side, trunk, [0.0] * 7
+            )[:3, 3].tolist()
+        driver._gateway = gateway
+        target_qpos = [-0.1, 0.2, 0.1, -0.3, 0.1, 0.05, -0.1]
+        target = kinematics.forward("left", trunk, target_qpos)[:3, 3].tolist()
+
+        result = driver.execute_action(
+            "move_to_pose", {"side": "left", "position_m": target}
+        )
+
+        self.assertTrue(result.startswith("Move-to-pose execution finished:"), result)
+        self.assertIsNotNone(gateway.local_trajectory_seen)
+        trajectory = gateway.local_trajectory_seen or []
+        self.assertGreater(len(trajectory), 1)
+        self.assertTrue(all(len(action) == 23 for action in trajectory))
 
     def test_invalid_configuration_is_rejected_at_construction(self) -> None:
         with self.assertRaises(contracts.ConfigValidationError):

@@ -254,7 +254,11 @@ class ObservationPublisherTest(unittest.TestCase):
                 "robot::robot:zed_link:Camera:0::rgb": image,
                 "robot::robot:left_realsense_link:Camera:0::rgb": image + 1,
                 "robot::robot:right_realsense_link:Camera:0::rgb": image + 2,
-                "robot::robot:proprio": np.zeros(3, dtype=np.float32),
+                "robot::cam_rel_poses": np.tile(
+                    np.asarray([0, 0, 0, 0, 0, 0, 1], dtype=np.float32),
+                    3,
+                )[None, :],
+                "robot::proprio": np.zeros((1, 61), dtype=np.float32),
             }
             message = msgpack.packb(payload, default=pack_array)
             publisher.capture(message)
@@ -262,6 +266,8 @@ class ObservationPublisherTest(unittest.TestCase):
             manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["reference_view"], "head")
             self.assertFalse(manifest["calibrated"])
+            self.assertTrue(manifest["extrinsics_calibrated"])
+            self.assertEqual(manifest["robot_state"]["proprio_dim"], 61)
             self.assertEqual(
                 [view["name"] for view in manifest["views"]],
                 ["head", "left_wrist", "right_wrist"],
@@ -292,6 +298,39 @@ def _camera_message(seed: int = 0) -> bytes:
         },
         default=_pack_array,
     )
+
+
+def _r1pro_message() -> bytes:
+    image = np.zeros((4, 5, 3), dtype=np.uint8)
+    proprio = np.zeros((1, 61), dtype=np.float32)
+    proprio[0, 3:10] = np.arange(7, dtype=np.float32) / 10
+    proprio[0, 24:26] = 0.05
+    proprio[0, 28:35] = np.arange(7, dtype=np.float32) / -10
+    proprio[0, 49:51] = 0.05
+    proprio[0, 53:57] = [1.0, -1.0, -0.5, 0.0]
+    poses = np.tile(
+        np.asarray([0, 0, 0, 0, 0, 0, 1], dtype=np.float32), 3
+    )[None, :]
+    return msgpack.packb(
+        {
+            "robot::robot:zed_link:Camera:0::rgb": image,
+            "robot::robot:left_realsense_link:Camera:0::rgb": image,
+            "robot::robot:right_realsense_link:Camera:0::rgb": image,
+            "robot::cam_rel_poses": poses,
+            "robot::proprio": proprio,
+        },
+        default=_pack_array,
+    )
+
+
+def _unpack_array(value):
+    if b"__ndarray__" in value:
+        return np.ndarray(
+            buffer=value[b"data"],
+            dtype=np.dtype(value[b"dtype"]),
+            shape=value[b"shape"],
+        )
+    return value
 
 
 class _ControllableOpenPIServer:
@@ -511,6 +550,111 @@ class ControlledExecutionOwnershipTest(unittest.TestCase):
         state = self.gateway.snapshot()
         self.assertTrue(state["stopped_cleanly"])
         self.assertEqual(state["status"], "stopped")
+
+    def test_local_hold_action_bypasses_openpi_and_uses_official_action_shape(self) -> None:
+        from websockets.sync.client import connect
+
+        self.gateway.stop()
+        with TemporaryDirectory() as temporary:
+            self.gateway = B1KProxyGateway(
+                upstream_url=f"ws://127.0.0.1:{self.upstream.port}",
+                listen_host="127.0.0.1",
+                listen_port=0,
+                controlled=True,
+                observation_workspace=temporary,
+                observation_publish_interval=1,
+            )
+            self.gateway.start()
+            with connect(
+                f"ws://127.0.0.1:{self.gateway.listen_port}",
+                compression=None,
+                max_size=None,
+            ) as client:
+                self.assertEqual(client.recv(), b"openpi-metadata")
+                client.send(_r1pro_message())
+                deadline = time.monotonic() + 2
+                while self.gateway.observation_count < 1 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                action = self.gateway.current_hold_action()
+                execution_id = self.gateway.begin_local_execution("hold_position", 1, action)
+                response = msgpack.unpackb(
+                    client.recv(timeout=2), raw=False, object_hook=_unpack_array
+                )
+                result = self.gateway.wait_for_execution(execution_id, progress_timeout_s=2)
+
+            self.assertEqual(response["action"].shape, (1, 23))
+            np.testing.assert_allclose(response["action"][0], action)
+            self.assertEqual(self.upstream.request_count(), 0)
+            self.assertEqual(result["status"], "step_completed")
+            self.assertEqual(result["completed_steps"], 1)
+            self.assertEqual(self.gateway.snapshot()["local_actions_generated"], 1)
+
+    def test_switching_from_local_action_resets_openpi_before_replanning(self) -> None:
+        from websockets.sync.client import connect
+
+        self.gateway.stop()
+        with TemporaryDirectory() as temporary:
+            self.gateway = B1KProxyGateway(
+                upstream_url=f"ws://127.0.0.1:{self.upstream.port}",
+                listen_host="127.0.0.1",
+                listen_port=0,
+                controlled=True,
+                observation_workspace=temporary,
+                observation_publish_interval=1,
+            )
+            self.gateway.start()
+            with connect(
+                f"ws://127.0.0.1:{self.gateway.listen_port}",
+                compression=None,
+                max_size=None,
+            ) as client:
+                self.assertEqual(client.recv(), b"openpi-metadata")
+                client.send(_r1pro_message())
+                deadline = time.monotonic() + 2
+                while self.gateway.observation_count < 1 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                local_id = self.gateway.begin_local_execution(
+                    "hold_position", 1, self.gateway.current_hold_action()
+                )
+                client.recv(timeout=2)
+                self.assertEqual(
+                    self.gateway.wait_for_execution(local_id, progress_timeout_s=2)["status"],
+                    "step_completed",
+                )
+                self.assertTrue(self.gateway.snapshot()["upstream_needs_reset"])
+
+                vla_id = self.gateway.begin_execution("turn on the radio", 1)
+                client.send(_r1pro_message())
+                self.upstream.wait_for_requests(2)
+                reset = msgpack.unpackb(self.upstream.received[0], raw=False)
+                self.assertEqual(reset, {"reset": True})
+                self.upstream.send(b"action-after-reset")
+                self.assertEqual(client.recv(timeout=2), b"action-after-reset")
+                result = self.gateway.wait_for_execution(vla_id, progress_timeout_s=2)
+
+            self.assertEqual(result["status"], "step_completed")
+            self.assertFalse(self.gateway.snapshot()["upstream_needs_reset"])
+            self.assertEqual(self.gateway.snapshot()["upstream_resets_sent"], 1)
+
+    def test_local_trajectory_returns_each_action_in_order(self) -> None:
+        from websockets.sync.client import connect
+
+        trajectory = [[float(index)] * 23 for index in range(3)]
+        execution_id = self.gateway.begin_local_trajectory("test trajectory", trajectory)
+        received = []
+        with self._connect() as client:
+            self.assertEqual(client.recv(), b"openpi-metadata")
+            for index in range(3):
+                client.send(f"observation-{index}".encode())
+                response = msgpack.unpackb(
+                    client.recv(timeout=2), raw=False, object_hook=_unpack_array
+                )
+                received.append(response["action"])
+
+        result = self.gateway.wait_for_execution(execution_id, progress_timeout_s=2)
+        self.assertEqual(result["completed_steps"], 3)
+        for index, action in enumerate(received):
+            np.testing.assert_allclose(action, np.asarray(trajectory[index])[None, :])
 
 
 class ObservationSynchronizationTest(unittest.TestCase):

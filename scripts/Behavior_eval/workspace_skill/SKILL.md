@@ -1,78 +1,92 @@
 ---
 name: vla
-description: Drive the BEHAVIOR-1K turning_on_radio π0.5 checkpoint through the native behavior_r1pro driver, using its exact frozen instruction and bounded action budgets.
+description: Execute the BEHAVIOR-1K turning_on_radio task with the R1Pro using bounded π0.5 navigation, calibrated object localization, safe arm primitives, and official evaluator feedback.
 metadata: {"Emerge":{"always":true}}
 ---
 
-# vla — BEHAVIOR-1K Turning On Radio
+# BEHAVIOR-1K Turning On Radio
 
-This workspace shadows the generic manipulation `vla` skill. In this episode
-`vla_execute` does **not** take a phase-local instruction: the official π0.5
-server fixes its prompt when it starts, so the only instruction that reaches the
-policy is the exact task sentence. A rephrased instruction is rejected before it
-is dispatched.
+This episode uses the native `behavior_r1pro` driver. The simulator is frozen
+while you reason and advances only when `execute_robot_action` is running. Make
+one physical decision at a time, then re-read `ROBOT_STATE.md` and the newest
+observation manifest.
 
-## Scope
+## Invariants
 
-Use this skill only while `robots.behavior_r1pro.mode` is
-`controlled_pi05_gateway` in `ROBOT_STATE.md`. The official BEHAVIOR evaluator
-owns the simulator, the episode reset, the termination decision and the score.
+- Every `vla_execute` call must use exactly:
+  `Turn on the radio receiver that's on the table in the living room.`
+- `step_completed` is action completion, not task success.
+- Only `evaluation.success == true` with `evaluation.phase == "completed"` is
+  authoritative success. Stop when `evaluation.done` is true.
+- Geometry may be used only when `object_location` returns `found: true` in the
+  `robot_base` frame. Never infer metres directly from an image.
+- Reinspect the scene after every physical action because wrist cameras and
+  object visibility change with the robot.
 
-## The only control action
+## Phased route
+
+Maintain the current phase in `PLAN.md` and follow this order.
+
+### 1. Coarse navigation
+
+Confirm `evaluator_connected` and `upstream_connected`. Inspect all current
+views. Call `vla_execute` with 200-400 steps. Continue with another chunk only
+if the new images show meaningful progress toward the living-room table and
+radio. Two chunks without visible approach progress trigger recovery rather
+than an identical third call.
+
+### 2. Calibrated localization
+
+When the radio is clearly visible and plausibly within reach, call:
 
 ```json
 {
-  "action_type": "vla_execute",
-  "parameters": {
-    "instruction": "Turn on the radio receiver that's on the table in the living room.",
-    "step": 300
-  },
-  "reasoning": "Continue the active BEHAVIOR episode, then inspect official progress."
+  "agent_name": "object_location",
+  "task": "Using every calibrated current view, locate the radio receiver on the living-room table and, only if it is independently visible in at least two views, its power button or power control. Return measured geometry in the observation coordinate frame; do not guess an unobserved control."
 }
 ```
 
-Rules:
+Require `status: success`, `found: true`, and `frame: robot_base` before using
+any returned coordinate. A radio bounding-box center is not automatically a
+button coordinate.
 
-1. `instruction` must be that exact English sentence, character for character.
-   Do not translate it, shorten it, split it into phases, or append
-   observations. Every rewrite is rejected.
-2. `step` is the number of policy action replies this call may consume. It is an
-   action budget, not a probability of success and not a count of model
-   forward passes. It must be a positive integer no larger than
-   `robots.behavior_r1pro.max_action_steps`.
-3. Use one bounded chunk per call and re-inspect the official state between
-   chunks. A long budget is not a substitute for verifying progress.
+### 3. Measured pre-contact approach
 
-`gateway_status` is available as a diagnostic action, but it is not part of the
-control loop.
+If the power control was measured, select the nearer arm using the current
+left/right end-effector positions in the manifest. Derive a pre-contact point
+8-15 cm from the control toward that end effector. Dispatch `move_to_pose` to
+the derived point. A short `move_linear` may follow only when the target is
+measured and the complete segment is visibly clear. Omit `orientation_quat`
+unless the current calibrated orientation is explicitly available and useful.
 
-Do not use `move_to_pose`, `move_linear`, `set_gripper`, `follow_arc`,
-`attach`, `navigate_vln` or object localization in this episode: the driver
-exposes no such action, and the evaluator only accepts the policy's own actions.
+If the driver rejects IK or reports an FK/state mismatch, do not alter the
+coordinate or retry the same primitive. Use a short VLA chunk to reposition the
+whole body, refresh observations, and localize again.
 
-## Bounded loop
+### 4. Fine contact
 
-1. Read `ROBOT_STATE.md` and confirm `evaluator_connected` and
-   `upstream_connected` are true, and that `evaluation.done` is not yet true.
-2. Dispatch one `vla_execute` chunk.
-3. Read `ROBOT_STATE.md` again. Confirm `state_synced` is true; if it is false,
-   the policy's last actions may not have been applied to the simulator yet, so
-   the reported state can be one step stale.
-4. Inspect the newest camera manifest at
-   `artifacts/observations/observation.json`. The views are uncalibrated, so use
-   them only for qualitative judgement, never for metric geometry.
-5. Repeat while `evaluation.done` is false and progress is still being made.
+Use `vla_execute` with 80-160 steps for final visual alignment and pressing the
+control. The checkpoint still receives the exact full task sentence; never
+replace it with a phase-local instruction. Inspect official state and fresh
+camera views immediately afterward.
 
-## Success and stopping
+### 5. Verify or recover
 
-- The **only** authoritative success signal is
-  `robots.behavior_r1pro.evaluation.success == true` together with
-  `evaluation.phase == "completed"`.
-- `step_completed` means the requested budget was consumed. `episode_finished`
-  means the evaluator disconnected. Neither means the radio is on.
-- `evaluation.phase == "error"` is an evaluator failure, not a task failure.
-- Stop dispatching as soon as `evaluation.done` is true, then report the
-  official result.
-- If the evaluator has terminated without success, report the task as not
-  completed. Do not retry the same chunk, and do not claim success.
-- Do not start another gateway, controller or simulator from the shell.
+When visual evidence is ambiguous, delegate `task_verification` with the
+self-contained question: whether the radio now visibly appears powered on and
+what visible evidence supports that conclusion. Its result guides recovery but
+does not override the official evaluator.
+
+Recovery choices:
+
+- Localization service error or unconfirmed segmentation: continue with
+  bounded VLA control; do not repeatedly call the failed service.
+- Radio still far away: use another coarse VLA chunk.
+- Radio visible but control occluded: use a short VLA repositioning chunk, then
+  obtain fresh localization.
+- Primitive rejected as unreachable: reposition with VLA and relocalize.
+- Failed final contact with a good approach pose: use one fresh short VLA
+  contact attempt after inspection, not an identical long rollout.
+
+Do not start servers, controllers, or simulators from shell tools inside the
+episode. The runner owns those processes.

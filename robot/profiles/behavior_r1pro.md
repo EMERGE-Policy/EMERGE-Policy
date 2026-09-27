@@ -1,97 +1,125 @@
-# BEHAVIOR-1K R1Pro π0.5 Gateway
+# BEHAVIOR R1Pro embodiment
 
-## Identity
+Driver: `behavior_r1pro`
 
-- **Robot:** R1Pro humanoid in OmniGibson
-- **Task:** `turning_on_radio`
-- **VLA:** official BEHAVIOR π0.5 checkpoint
-- **Driver:** `behavior_r1pro`
-- **Mode:** `controlled_pi05_gateway`
+The official BEHAVIOR evaluator owns simulator time, reset, termination, score,
+and video. The driver grants individual action budgets through the evaluator's
+websocket connection. Simulator time is frozen while the Agent is reasoning.
 
-## Supported Action
+## Coordinate and state contract
 
-The official BEHAVIOR evaluator owns the simulator, episode reset, task
-termination, metrics, and video recording. This driver owns only the gateway
-between the evaluator and the official OpenPI π0.5 server, so the only action it
-accepts is `vla_execute`.
+All measured positions used by the actions below must be in `robot_base`, the
+frame named by `artifacts/observations/observation.json`. In this frame +X is
+forward, +Y is left, and +Z is up. Never copy image pixels into a metric action.
+
+The observation manifest contains three calibrated views (`head`,
+`left_wrist`, and `right_wrist`), exact intrinsics for their published 224x224
+images, base-relative camera transforms, and structured R1Pro proprioception.
+`robots.behavior_r1pro` in `ROBOT_STATE.md` contains the live evaluator and
+gateway status. Read both files again after every physical action.
+
+## Supported actions
+
+### `vla_execute`
+
+Use the official π0.5 policy for coarse whole-body navigation and visually
+sensitive contact:
 
 ```json
 {
-  "action_type": "vla_execute",
-  "parameters": {
-    "instruction": "Turn on the radio receiver that's on the table in the living room.",
-    "step": 300
-  }
+  "instruction": "Turn on the radio receiver that's on the table in the living room.",
+  "step": 300
 }
 ```
 
-Rules the driver enforces:
+The instruction must be exactly that sentence. `step` is a positive policy
+action budget no larger than `robots.behavior_r1pro.max_action_steps`. Use
+bounded chunks and inspect progress between them.
 
-- `instruction` must be that exact sentence. The π0.5 server fixes its prompt at
-  startup, so a rephrased instruction is rejected locally instead of silently
-  running the original one. `prompt` is accepted as a legacy alias.
-- `step` must be a positive integer no larger than
-  `robots.behavior_r1pro.max_action_steps`. It is a count of policy action
-  replies, not a number of model forward passes: the OpenPI server caches an
-  action horizon internally.
-- `parameters` must be an object, and `step` must be present.
+### `move_to_pose`
 
-`gateway_status` is also accepted as a read-only diagnostic. It never consumes
-the policy budget and is not part of the control loop.
+Move one end effector toward a reachable measured position:
 
-Motion primitives (`move_to_pose`, `move_linear`, `set_gripper`, `follow_arc`)
-and `attach` are not available for this embodiment; the evaluator only applies
-the policy's own actions.
+```json
+{"side": "left", "position_m": [0.55, 0.18, 0.92]}
+```
 
-## Result semantics
+`side` is `left` or `right`. `position_m` must come from a successful
+`object_location` result in `robot_base`, or be a clearance point derived from
+that result and the current end-effector position. `orientation_quat` in XYZW
+order is optional. When it is omitted, IK constrains position only.
 
-| Result | Meaning |
-|---|---|
-| `VLA execution finished: step_completed` | The requested budget was consumed **and** the simulator was confirmed to apply the actions. |
-| `VLA execution finished: episode_finished` | The evaluator disconnected while the action was in flight. |
-| `Interrupted: ...` | The Controller cancelled the action. The queue records this as `cancelled`. |
-| `Failed: ...` | Validation, readiness, timeout, upstream failure, or an unconfirmed simulator state. The queue records this as `failed`. |
+### `move_linear`
 
-`step_completed` never means the task succeeded.
+Move one end effector along a straight Cartesian path to a reachable measured
+position:
 
-## State published to the Agent
+```json
+{"side": "right", "position_m": [0.61, -0.16, 0.89]}
+```
 
-`robots.behavior_r1pro` in `ROBOT_STATE.md` additionally exposes:
+Use this only for a short final approach or retreat through visibly clear
+space. It has the same `side`, `position_m`, and optional `orientation_quat`
+parameters as `move_to_pose`.
 
-- `state_synced` — whether the last action was confirmed applied. While it is
-  `false`, the reported evaluation may be one step stale.
-- `applied_steps` — the evaluator's step counter after synchronization.
-- `max_action_steps`, `execution_timeout_s`, `progress_timeout_s`,
-  `state_sync_timeout_s` — the active budgets.
-- `gateway_status` — the raw gateway lifecycle status, separate from the
-  driver's own `status`.
-- `evaluation` — the live contents of the official evaluator status file.
-- `last_disconnect` — why the evaluator connection ended, when it did.
+### `set_gripper`
 
-The authoritative result remains the JSON written by the BEHAVIOR evaluator;
-`evaluation.success` together with `evaluation.phase == "completed"` is the only
-success signal. `evaluation.phase == "error"` is an evaluator failure, not a
-task failure.
+```json
+{"side": "left", "command": "open", "steps": 15}
+```
 
-## Synchronization and timeouts
+Provide exactly one of `command` (`open` or `close`) and `opening_m` (0.0 to
+0.1 metres). `steps` is optional. Turning on the radio normally does not
+require a grasp, so do not close a gripper without a concrete reason.
 
-The evaluator applies an action and only then sends the next observation, so a
-new observation frame is direct evidence that the actions reached the simulator.
-The driver waits for that frame, and falls back to the evaluator's step counter
-or a terminal status when the episode ends with the last action.
+### `hold_position`
 
-- `execution_timeout_s` bounds a single `vla_execute` call.
-- `progress_timeout_s` bounds the wait between two confirmed policy replies.
-- `state_sync_timeout_s` bounds the wait for simulator confirmation.
+```json
+{"step": 1}
+```
 
-Exceeding any of them fails the action instead of returning a success-shaped
-result.
+This repeats current joint and gripper positions with zero base velocity. Use
+it only for synchronization or diagnosis. Reasoning itself does not require a
+hold because the simulator is paused between actions.
 
-## Cameras
+`gateway_status` is read-only. `follow_arc`, `attach`, and `navigate_vln` are
+not implemented by this driver.
 
-Camera snapshots are published to `artifacts/observations/observation.json`
-together with the images they reference. Every published revision carries
-`observation_seq`, `episode_id` and `captured_at`, and each image path is
-revision-specific so a reader can never mix two frames. The views have no
-simulator camera extrinsics and their intrinsics are approximations: they must
-not be used as calibrated 3D measurements.
+Every local primitive is bounded by official joint limits and a per-step joint
+change limit. Before dispatch, the driver compares URDF forward kinematics with
+the observed end-effector position. It refuses the action if the coordinate
+conventions disagree. Switching back to π0.5 resets its action chunk so the
+policy replans from the post-primitive observation.
+
+## Result and success semantics
+
+An action result ending in `step_completed` says only that its action budget
+was consumed and synchronized with the simulator. It does not mean the task
+succeeded. The sole authoritative success signal is
+`evaluation.success == true` together with `evaluation.phase == "completed"`.
+Stop immediately when `evaluation.done` is true. Treat `evaluation.phase ==
+"error"` as an evaluator failure.
+
+## Required task route
+
+1. Confirm evaluator and OpenPI connectivity and inspect the newest views.
+2. Use one 200-400 step `vla_execute` chunk for coarse navigation. Repeat only
+   when the new head view shows meaningful approach progress.
+3. Once the radio is clearly visible and plausibly within arm reach, call the
+   `object_location` specialist. Ask it to locate the radio and, when visibly
+   separable in at least two views, its power control. The returned frame must
+   be `robot_base`.
+4. If a control position is measured and reachable, choose the arm on the same
+   side. Derive a pre-contact point 8-15 cm toward the current end effector from
+   the measured control. Use `move_to_pose` for that clearance point. Use a
+   short `move_linear` only when its entire path is visibly clear.
+5. Use a short 80-160 step `vla_execute` chunk for the final visual alignment
+   and button contact. Re-read official state and fresh images.
+6. Call `task_verification` when visible evidence of the radio state is useful,
+   but never replace the official evaluator success signal with its answer.
+
+If localization is unavailable or cannot distinguish the control, keep using
+bounded VLA chunks; do not invent coordinates. If IK rejects a target, use a
+short VLA repositioning chunk, obtain a fresh observation, and localize again.
+After two VLA chunks with no visible approach progress, do not blindly repeat a
+third: localize, change the recovery action, or report the observed blocker.

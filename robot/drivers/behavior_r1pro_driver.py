@@ -20,6 +20,12 @@ from robot.behavior.gateway import (
     TIMEOUT,
     B1KProxyGateway,
 )
+from robot.behavior.r1pro_kinematics import R1ProKinematics
+from robot.behavior.r1pro_motion import (
+    plan_move_linear,
+    plan_move_to_pose,
+    plan_set_gripper,
+)
 from robot.drivers.base_driver import BaseDriver, CancelCheck
 
 _SUCCESS_STATES = frozenset({STEP_COMPLETED, EPISODE_FINISHED, EPISODE_RESET})
@@ -43,7 +49,7 @@ class BehaviorR1ProDriver(BaseDriver):
         self,
         gui: bool = False,
         workspace: str | Path = "~/.Emerge/workspace",
-        upstream_url: str = "ws://127.0.0.1:8001",
+        upstream_url: str = "ws://127.0.0.1:8011",
         listen_host: str = "127.0.0.1",
         listen_port: int = 8000,
         upstream_open_timeout_s: float = 10.0,
@@ -51,6 +57,9 @@ class BehaviorR1ProDriver(BaseDriver):
         max_action_steps: int = 4000,
         status_path: str | Path | None = None,
         observation_publish_interval: int = 5,
+        camera_calibration: dict[str, Any] | None = None,
+        r1pro_urdf_path: str | Path | None = None,
+        primitive_max_steps: int = 240,
         profile_path: str | Path | None = None,
         execution_timeout_s: float = 1800.0,
         progress_timeout_s: float = 300.0,
@@ -71,6 +80,9 @@ class BehaviorR1ProDriver(BaseDriver):
                 "max_action_steps": max_action_steps,
                 "status_path": status_path,
                 "observation_publish_interval": observation_publish_interval,
+                "camera_calibration": camera_calibration,
+                "r1pro_urdf_path": str(r1pro_urdf_path) if r1pro_urdf_path else None,
+                "primitive_max_steps": primitive_max_steps,
                 "profile_path": profile_path,
                 "execution_timeout_s": execution_timeout_s,
                 "progress_timeout_s": progress_timeout_s,
@@ -87,6 +99,12 @@ class BehaviorR1ProDriver(BaseDriver):
         self._execution_timeout_s = config["execution_timeout_s"]
         self._progress_timeout_s = config["progress_timeout_s"]
         self._state_sync_timeout_s = config["state_sync_timeout_s"]
+        self._primitive_max_steps = config["primitive_max_steps"]
+        self._kinematics = (
+            R1ProKinematics(config["r1pro_urdf_path"])
+            if config["r1pro_urdf_path"]
+            else None
+        )
         configured_status = config["status_path"]
         self.status_path = (
             Path(configured_status).expanduser().resolve()
@@ -113,6 +131,7 @@ class BehaviorR1ProDriver(BaseDriver):
             controlled=True,
             observation_workspace=self.workspace,
             observation_publish_interval=config["observation_publish_interval"],
+            camera_calibration=config["camera_calibration"],
         )
 
     # ------------------------------------------------------------------ #
@@ -140,15 +159,44 @@ class BehaviorR1ProDriver(BaseDriver):
                 f"{state['status']}, active_connections={state['active_connections']}, "
                 f"requests_forwarded={state['requests_forwarded']}."
             )
-        if action_type != "vla_execute":
+        supported = {
+            "vla_execute",
+            "hold_position",
+            "move_to_pose",
+            "move_linear",
+            "set_gripper",
+        }
+        if action_type not in supported:
             return f"Unknown action type: {action_type!r}."
 
         try:
-            instruction, step = contracts.validate_action(
-                params,
-                required_instruction=self.required_instruction,
-                max_steps=self.max_action_steps,
-            )
+            if action_type == "vla_execute":
+                instruction, step = contracts.validate_action(
+                    params,
+                    required_instruction=self.required_instruction,
+                    max_steps=self.max_action_steps,
+                )
+            elif action_type == "hold_position":
+                if not isinstance(params, dict):
+                    raise contracts.ActionValidationError(
+                        "hold_position parameters must be an object"
+                    )
+                unknown = sorted(set(params) - {"step"})
+                if unknown:
+                    raise contracts.ActionValidationError(
+                        "hold_position received unknown parameters: " + ", ".join(unknown)
+                    )
+                step = contracts.validate_step(
+                    params.get("step", 1), max_steps=self.max_action_steps
+                )
+                instruction = "hold_position"
+            else:
+                if not isinstance(params, dict):
+                    raise contracts.ActionValidationError(
+                        f"{action_type} parameters must be an object"
+                    )
+                step = 0
+                instruction = action_type
         except contracts.ActionValidationError as exc:
             return f"{contracts.FAILED_PREFIX} {exc}"
 
@@ -163,11 +211,72 @@ class BehaviorR1ProDriver(BaseDriver):
         baseline_steps = _int_or_none((evaluation or {}).get("steps"))
 
         try:
-            execution_id = self._gateway.begin_execution(
-                instruction,
-                step,
-                baseline_evaluator_steps=baseline_steps,
-            )
+            if action_type == "vla_execute":
+                execution_id = self._gateway.begin_execution(
+                    instruction,
+                    step,
+                    baseline_evaluator_steps=baseline_steps,
+                )
+            elif action_type == "hold_position":
+                execution_id = self._gateway.begin_local_execution(
+                    instruction,
+                    step,
+                    self._gateway.current_hold_action(),
+                    baseline_evaluator_steps=baseline_steps,
+                )
+            else:
+                if self._kinematics is None:
+                    raise ValueError(
+                        "R1Pro motion primitives are unavailable because r1pro_urdf_path is not configured"
+                    )
+                state = self._gateway.current_robot_state()
+                hold = self._gateway.current_hold_action()
+                if action_type == "move_to_pose":
+                    unknown = sorted(
+                        set(params) - {"side", "position_m", "orientation_quat"}
+                    )
+                    if unknown:
+                        raise ValueError("move_to_pose received unknown parameters: " + ", ".join(unknown))
+                    plan = plan_move_to_pose(
+                        self._kinematics,
+                        state,
+                        hold,
+                        side=params.get("side"),
+                        position_m=params.get("position_m"),
+                        orientation_quat=params.get("orientation_quat"),
+                        max_steps=self._primitive_max_steps,
+                    )
+                elif action_type == "move_linear":
+                    unknown = sorted(
+                        set(params) - {"side", "position_m", "orientation_quat"}
+                    )
+                    if unknown:
+                        raise ValueError("move_linear received unknown parameters: " + ", ".join(unknown))
+                    plan = plan_move_linear(
+                        self._kinematics,
+                        state,
+                        hold,
+                        side=params.get("side"),
+                        position_m=params.get("position_m"),
+                        orientation_quat=params.get("orientation_quat"),
+                        max_steps=self._primitive_max_steps,
+                    )
+                else:
+                    unknown = sorted(set(params) - {"side", "command", "opening_m", "steps"})
+                    if unknown:
+                        raise ValueError("set_gripper received unknown parameters: " + ", ".join(unknown))
+                    plan = plan_set_gripper(
+                        hold,
+                        side=params.get("side"),
+                        command=params.get("command"),
+                        opening_m=params.get("opening_m"),
+                        steps=params.get("steps", 15),
+                    )
+                execution_id = self._gateway.begin_local_trajectory(
+                    plan.description,
+                    [list(action) for action in plan.actions],
+                    baseline_evaluator_steps=baseline_steps,
+                )
             result = self._gateway.wait_for_execution(
                 execution_id,
                 cancel_check=cancel_check,
@@ -183,7 +292,7 @@ class BehaviorR1ProDriver(BaseDriver):
 
         if status not in TERMINAL_EXECUTION_STATES:
             self._last_verdict = "unexpected_status"
-            return f"{contracts.FAILED_PREFIX} unexpected VLA execution status {status!r}"
+            return f"{contracts.FAILED_PREFIX} unexpected robot execution status {status!r}"
         if status == INTERRUPTED:
             self._last_sync_ok = False
             self._last_verdict = "interrupted"
@@ -195,7 +304,7 @@ class BehaviorR1ProDriver(BaseDriver):
             self._last_sync_ok = False
             self._last_verdict = status
             return (
-                f"{contracts.FAILED_PREFIX} VLA execution did not complete "
+                f"{contracts.FAILED_PREFIX} {action_type} did not complete "
                 f"({status}) after {completed} step(s): {detail}"
             )
 
@@ -206,14 +315,22 @@ class BehaviorR1ProDriver(BaseDriver):
 
         if not synced:
             return (
-                f"{contracts.FAILED_PREFIX} {completed} policy action(s) were forwarded but the "
+                f"{contracts.FAILED_PREFIX} {completed} robot action(s) were issued but the "
                 "official evaluator state could not be confirmed afterwards; "
                 "the simulator may not have applied them."
             )
         if status in _SUCCESS_STATES:
             applied = f", applied_steps={applied_steps}" if applied_steps is not None else ""
-            return f"VLA execution finished: {status}, steps={completed}{applied}."
-        return f"{contracts.FAILED_PREFIX} unexpected VLA execution status {status!r}"
+            labels = {
+                "vla_execute": "VLA execution",
+                "hold_position": "Hold execution",
+                "move_to_pose": "Move-to-pose execution",
+                "move_linear": "Linear execution",
+                "set_gripper": "Gripper execution",
+            }
+            label = labels[action_type]
+            return f"{label} finished: {status}, steps={completed}{applied}."
+        return f"{contracts.FAILED_PREFIX} unexpected robot execution status {status!r}"
 
     def get_runtime_state(self) -> dict[str, Any]:
         state = self._gateway.snapshot()

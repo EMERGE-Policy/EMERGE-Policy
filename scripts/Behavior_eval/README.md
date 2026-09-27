@@ -14,7 +14,7 @@ robot and the official single-task π0.5 checkpoint.
 |---|---|
 | `eval_behavior_agent.py` | Creates one episode workspace and supervises the Agent, Controller, OpenPI server, and BEHAVIOR evaluator. |
 | `runner_common.py` | Shared process, port, workspace, and artifact helpers. |
-| `workspace_skill/SKILL.md` | Episode-local `vla` instructions required by the frozen π0.5 prompt. |
+| `workspace_skill/SKILL.md` | Episode-local phased navigation, localization, approach, contact, and recovery instructions. |
 | `robot/drivers/behavior_r1pro_driver.py` | Native EMERGE driver consumed by `robot.controller`. |
 | `robot/behavior/` | BEHAVIOR websocket protocol, status contract, and observation publishing. |
 | `robot/profiles/behavior_r1pro.md` | Controller-installed robot profile. |
@@ -37,6 +37,20 @@ One episode intentionally spans separate Python environments:
 
 The evaluator only calls `env.step` while the driver grants an action budget.
 While the LLM is reasoning and no action is queued, simulator time is frozen.
+
+The BEHAVIOR pipeline reserves distinct local ports so perception services can
+run alongside the policy and evaluator:
+
+| Service | Default port |
+|---|---:|
+| EMERGE gateway | 8000 |
+| VGGT | 8001 |
+| SAM3 | 8002 |
+| OpenPI π0.5 | 8011 |
+
+`--gateway-port` and `--upstream-port` may override the gateway and OpenPI
+ports. They must remain different; when VGGT and SAM3 use their standard
+configuration, do not assign OpenPI to 8001 or 8002.
 
 ## Run one instance
 
@@ -75,7 +89,9 @@ action state changes in the runner terminal. Provider-hidden reasoning is not
 available, and is not written by EMERGE.
 
 The Agent chooses every action through `execute_robot_action`; the runner does
-not enqueue actions on its behalf. The official result remains authoritative:
+not enqueue actions on its behalf. It can combine bounded π0.5 chunks with
+calibrated `object_location`, native R1Pro `move_to_pose` / `move_linear` /
+`set_gripper` actions, and `task_verification`. The official result remains authoritative:
 `step_completed` only means that a requested action budget was consumed. During
 the rollout, EMERGE maintains the live episode state from its controlled
 websocket gateway. At completion it reads the result JSON written by the stock
@@ -125,11 +141,32 @@ The runner removes inherited `ISAAC_PATH`, `ISAACSIM_PATH`, `EXP_PATH`, and
 `CARB_APP_PATH` only for the evaluator subprocess, allowing the Isaac Sim
 installation in `/data/yxy/envs/behavior` to configure its own paths.
 
+## Perception services for measured approach
+
+The π0.5-only fallback works without the perception servers. To enable measured
+object localization, start VGGT and SAM3 on their reserved ports before the
+episode:
+
+```bash
+cd /data/yxy/EMERGE-Humanoid
+VGGT_GPU=0 SAM3_GPU=0 \
+  bash scripts/model_server/start_external_model_servers.sh --services vggt,sam3
+```
+
+This requires the `EmergePolicy` environment and
+`checkpoints/vggt/model.pt` plus `checkpoints/sam3/model.pt`. On a single GPU,
+both services can share GPU 0 if memory permits. If either service is absent or
+localization cannot confirm the control, the Agent follows the skill's bounded
+VLA fallback instead of inventing coordinates.
+
 ## Current limits
 
 - Only `turning_on_radio`, R1Pro, and the official single-task π0.5 checkpoint
   are wired into this entrypoint.
-- Camera calibration in the observation manifest is approximate, so the Agent
-  should use these views for qualitative inspection only.
+- Camera extrinsics and the current R1Pro proprioception are copied from the
+  official evaluator observation into the manifest without changing the
+  OpenPI wire message. Extrinsics and localization results use the `robot_base`
+  coordinate frame; checked-in intrinsics match the official v3.9.3 wrapper at
+  the published 224x224 resolution.
 - The BEHAVIOR evaluator and its R1Pro configuration remain external to this
   repository.

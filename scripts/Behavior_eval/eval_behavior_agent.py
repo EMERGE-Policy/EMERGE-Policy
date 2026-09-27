@@ -64,6 +64,8 @@ from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
 
 DEFAULT_DRIVER_CONFIG = EMERGE_ROOT / "dev/behavior_agent_eval.json"
 DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
+DEFAULT_GATEWAY_PORT = 8000
+DEFAULT_OPENPI_PORT = 8011
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -83,7 +85,9 @@ EVALUATION_INSTRUCTIONS = f"""
 You control one R1Pro episode for `turning_on_radio` through the
 `behavior_r1pro` driver.
 
-- Use `execute_robot_action` with action type `vla_execute`.
+- Follow the phased route in the active `vla` skill: bounded VLA navigation,
+  calibrated object localization, measured pre-contact motion when available,
+  short VLA contact, and evidence-based recovery.
 - The instruction must be exactly, character for character: `{OFFICIAL_PROMPT}`
 - `step` is an action budget and must not exceed
   `robots.behavior_r1pro.max_action_steps` in `ROBOT_STATE.md`.
@@ -98,8 +102,15 @@ You control one R1Pro episode for `turning_on_radio` through the
 - `robots.behavior_r1pro.evaluation.phase == "error"` is an evaluator failure,
   not a task failure.
 - Current camera views are listed in
-  `artifacts/observations/observation.json`. They are uncalibrated; use them
-  only for qualitative judgement.
+  `artifacts/observations/observation.json`. The manifest contains calibrated
+  224x224 intrinsics, base-relative camera transforms, and structured R1Pro
+  proprioception. Geometry actions may use only successful `object_location`
+  coordinates whose frame is `robot_base`.
+- `move_to_pose`, `move_linear`, `set_gripper`, and `hold_position` are native
+  R1Pro actions. Never invent a metric target; fall back to bounded VLA when a
+  control cannot be localized safely.
+- After a local motion, the gateway resets OpenPI before the next
+  `vla_execute`, forcing the policy to replan from the new observation.
 - Stop dispatching once `evaluation.done` is true and report the official
   result.
 """.strip()
@@ -165,8 +176,16 @@ def parse_args() -> argparse.Namespace:
         default=6_000,
         help="Maximum BEHAVIOR simulator steps for the episode. Default: 6000.",
     )
-    parser.add_argument("--upstream-port", type=int, default=8001)
-    parser.add_argument("--gateway-port", type=int, default=8000)
+    parser.add_argument(
+        "--upstream-port",
+        type=int,
+        default=DEFAULT_OPENPI_PORT,
+        help=(
+            "OpenPI policy server port. The default is kept separate from "
+            "VGGT (8001) and SAM3 (8002)."
+        ),
+    )
+    parser.add_argument("--gateway-port", type=int, default=DEFAULT_GATEWAY_PORT)
     parser.add_argument("--startup-timeout", type=float, default=600.0)
     parser.add_argument("--episode-timeout", type=float, default=1800.0)
     parser.add_argument("--poll-interval", type=float, default=0.2)
@@ -251,6 +270,7 @@ def _episode_driver_config(
     gateway_port: int,
     max_action_steps: int,
     state_sync_timeout_s: float,
+    r1pro_urdf_path: Path | None = None,
 ) -> Path:
     """Write one episode-local config, following the native LIBERO runner."""
     config = copy.deepcopy(base_config)
@@ -267,6 +287,7 @@ def _episode_driver_config(
             "state_sync_timeout_s": state_sync_timeout_s,
             "expected_task": TASK_NAME,
             "expected_instance_id": None,
+            "r1pro_urdf_path": str(r1pro_urdf_path) if r1pro_urdf_path else None,
         }
     )
     normalized = validate_driver_config(config)
@@ -415,9 +436,12 @@ def _agent_message(max_action_steps: int) -> str:
     return (
         "Complete this BEHAVIOR-1K simulated robot task:\n\n"
         f"{OFFICIAL_PROMPT}\n\n"
-        "Act autonomously through execute_robot_action. Use the exact instruction above "
-        f"and request at most {max_action_steps} steps per action. Start with a useful "
-        "bounded chunk, then inspect the official evaluation state and camera snapshots. "
+        "Act autonomously through execute_robot_action and follow the phased route in "
+        "the active BEHAVIOR vla skill. Use the exact instruction above for every VLA "
+        f"call and request at most {max_action_steps} steps per action. Start with a "
+        "bounded navigation chunk, then use fresh observations, calibrated localization "
+        "and measured primitives when their preconditions hold. Recover from lack of "
+        "progress instead of repeating the same long VLA rollout. "
         "Do not finish while official success is false unless the evaluator has terminated."
     )
 
@@ -430,7 +454,9 @@ def _feedback_message(status: dict[str, Any], max_action_steps: int) -> str:
         f"Task: {OFFICIAL_PROMPT}\n"
         f"Current evaluator status: {json.dumps(status, ensure_ascii=False)}\n"
         f"Maximum steps per action: {max_action_steps}.\n\n"
-        "Inspect ROBOT_STATE.md, ACTION.md, and the latest camera manifest before acting."
+        "Inspect ROBOT_STATE.md, ACTION.md, the latest camera manifest, and PLAN.md before "
+        "acting. Resume the correct phase; do not restart the rollout or repeat a failed "
+        "action without new evidence."
     )
 
 
@@ -689,6 +715,8 @@ def main() -> int:
         raise ValueError("--agent-max-iterations must be positive")
     if args.max_agent_feedback_rounds < 0:
         raise ValueError("--max-agent-feedback-rounds must not be negative")
+    if args.upstream_port == args.gateway_port:
+        raise ValueError("--upstream-port and --gateway-port must be different")
 
     openpi_root = require_path(args.openpi_root, "OpenPI root")
     behavior_root = require_path(args.behavior_root, "BEHAVIOR root")
@@ -726,6 +754,8 @@ def main() -> int:
         gateway_port=args.gateway_port,
         max_action_steps=max_action_steps,
         state_sync_timeout_s=args.state_sync_timeout,
+        r1pro_urdf_path=behavior_root
+        / "datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf",
     )
 
     processes: list = []

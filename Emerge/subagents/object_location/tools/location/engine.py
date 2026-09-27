@@ -169,7 +169,14 @@ class LocationEngine:
             ray_consensus_tolerance_m=self._ray_consensus_tolerance_m,
             min_consistent_views=self._min_consistent_views,
         )
+        observation = self._store.current()
         for result, selection in zip(objects, selections, strict=True):
+            if result.get("found"):
+                # VGGT is aligned to the calibrated T_world_camera inputs.  In
+                # BEHAVIOR those transforms are expressed in robot_base, so
+                # expose that real frame instead of the estimator's generic
+                # internal "world" label.
+                result["frame"] = observation.coordinate_frame
             result["candidate_id"] = selection["candidate_id"]
             result["semantic_verified"] = True
             verified_instances = _verified_instances(selection)
@@ -182,6 +189,7 @@ class LocationEngine:
         geometry = self._segmentation.geometry
         return {
             "reference_view": geometry["reference_view"],
+            "coordinate_frame": observation.coordinate_frame,
             "objects": objects,
             "geometry_alignment": geometry["alignment"],
         }

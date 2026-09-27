@@ -69,8 +69,8 @@ def build_object_location_subagent(
         name="object_location",
         description=(
             "Locate discrete movable objects and independently segmentable "
-            "destinations, obstacles, and task-relevant visible LIBERO fixtures "
-            "in the world frame from calibrated camera views."
+            "destinations, obstacles, controls, and task-relevant visible fixtures "
+            "in the observation's calibrated coordinate frame."
         ),
         system_prompt=OBJECT_LOCATION_SYSTEM_PROMPT,
         provider=provider,

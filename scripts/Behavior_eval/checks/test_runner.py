@@ -20,8 +20,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from robot.behavior import contracts
+from robot.behavior.observation import CAMERA_POSE_ORDER
 from scripts.Behavior_eval.checks import verify_artifacts
 from scripts.Behavior_eval.eval_behavior_agent import (
+    DEFAULT_GATEWAY_PORT,
+    DEFAULT_OPENPI_PORT,
     _actions_settled,
     _episode_driver_config,
     _evaluator_command,
@@ -66,6 +69,10 @@ class RunnerCliTest(unittest.TestCase):
         self.assertTrue(args.headless)
         self.assertFalse(args.show_agent_events)
         self.assertEqual(args.robot_config.name, "behavior_r1pro_openpi.yaml")
+        self.assertEqual(args.gateway_port, DEFAULT_GATEWAY_PORT)
+        self.assertEqual(args.upstream_port, DEFAULT_OPENPI_PORT)
+        self.assertEqual(args.gateway_port, 8000)
+        self.assertEqual(args.upstream_port, 8011)
 
     def test_native_config_name_and_live_options_are_accepted(self) -> None:
         with patch.object(
@@ -75,12 +82,18 @@ class RunnerCliTest(unittest.TestCase):
                 "eval_behavior_agent.py",
                 "--config",
                 "/tmp/provider.json",
+                "--upstream-port",
+                "9011",
+                "--gateway-port",
+                "9010",
                 "--no-headless",
                 "--show-agent-events",
             ],
         ):
             args = parse_args()
         self.assertEqual(args.agent_config, Path("/tmp/provider.json"))
+        self.assertEqual(args.upstream_port, 9011)
+        self.assertEqual(args.gateway_port, 9010)
         self.assertFalse(args.headless)
         self.assertTrue(args.show_agent_events)
 
@@ -219,6 +232,36 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             "robot.drivers.behavior_r1pro_driver.BehaviorR1ProDriver",
         )
 
+    def test_checked_in_driver_ports_do_not_conflict_with_perception_services(self) -> None:
+        from Emerge.config.schema import ObjectLocationSubagentConfig
+
+        config_path = Path(__file__).resolve().parents[3] / "dev/behavior_agent_eval.json"
+        driver_config = json.loads(config_path.read_text(encoding="utf-8"))
+        perception = ObjectLocationSubagentConfig()
+
+        self.assertEqual(driver_config["listen_port"], DEFAULT_GATEWAY_PORT)
+        self.assertEqual(driver_config["upstream_url"], f"ws://127.0.0.1:{DEFAULT_OPENPI_PORT}")
+        self.assertEqual(perception.vggt_url, "ws://localhost:8001")
+        self.assertEqual(perception.sam3_url, "ws://localhost:8002")
+        self.assertEqual(
+            len({DEFAULT_GATEWAY_PORT, 8001, 8002, DEFAULT_OPENPI_PORT}),
+            4,
+        )
+
+    def test_checked_in_camera_intrinsics_match_official_default_wrapper(self) -> None:
+        config_path = Path(__file__).resolve().parents[3] / "dev/behavior_agent_eval.json"
+        driver_config = contracts.validate_driver_config(
+            json.loads(config_path.read_text(encoding="utf-8"))
+        )
+        cameras = driver_config["camera_calibration"]["cameras"]
+
+        self.assertEqual(cameras["head"]["resolution"], [224, 224])
+        self.assertAlmostEqual(cameras["head"]["intrinsics"][0][0], 306.0 * 224 / 720)
+        self.assertAlmostEqual(
+            cameras["left_wrist"]["intrinsics"][0][0], 388.6639 * 224 / 480
+        )
+        self.assertEqual(cameras["right_wrist"], cameras["left_wrist"])
+
     def test_evaluator_command_targets_stock_behavior_393(self) -> None:
         command = _evaluator_command(
             behavior_python=Path("/env/bin/python"),
@@ -253,6 +296,30 @@ class NativeDriverConfigurationTest(unittest.TestCase):
                 "right_wrist": "robot:right_realsense_link:Camera:0",
                 "head": "robot:zed_link:Camera:0",
             },
+        )
+        self.assertEqual(
+            list(config["eval"]["camera_sensor_names"]),
+            list(CAMERA_POSE_ORDER),
+        )
+        self.assertEqual(
+            config["proprio_obs"],
+            [
+                "base_qvel",
+                "arm_left_qpos",
+                "arm_left_qvel",
+                "eef_left_pos",
+                "eef_left_quat",
+                "gripper_left_qpos",
+                "gripper_left_qvel",
+                "arm_right_qpos",
+                "arm_right_qvel",
+                "eef_right_pos",
+                "eef_right_quat",
+                "gripper_right_qpos",
+                "gripper_right_qvel",
+                "trunk_qpos",
+                "trunk_qvel",
+            ],
         )
 
 

@@ -1,6 +1,6 @@
 {
   "workspace": "~/.Emerge/workspace",
-  "upstream_url": "ws://127.0.0.1:8001",
+  "upstream_url": "ws://127.0.0.1:8011",
   "listen_host": "127.0.0.1",
   "listen_port": 8000,
   "upstream_open_timeout_s": 10.0,
@@ -8,6 +8,26 @@
   "max_action_steps": 4000,
   "status_path": "~/.Emerge/workspace/BEHAVIOR_STATUS.json",
   "observation_publish_interval": 5,
+  "camera_calibration": {
+    "source": "BEHAVIOR-1K v3.9.3 R1Pro evaluation intrinsics scaled to DefaultWrapper 224x224 observations",
+    "coordinate_frame": "robot_base",
+    "cameras": {
+      "left_wrist": {
+        "resolution": [224, 224],
+        "intrinsics": [[181.37648666666666, 0.0, 112.0], [0.0, 181.37648666666666, 112.0], [0.0, 0.0, 1.0]]
+      },
+      "right_wrist": {
+        "resolution": [224, 224],
+        "intrinsics": [[181.37648666666666, 0.0, 112.0], [0.0, 181.37648666666666, 112.0], [0.0, 0.0, 1.0]]
+      },
+      "head": {
+        "resolution": [224, 224],
+        "intrinsics": [[95.2, 0.0, 112.0], [0.0, 95.2, 112.0], [0.0, 0.0, 1.0]]
+      }
+    }
+  },
+  "r1pro_urdf_path": null,
+  "primitive_max_steps": 240,
   "execution_timeout_s": 1800.0,
   "progress_timeout_s": 300.0,
   "state_sync_timeout_s": 120.0,

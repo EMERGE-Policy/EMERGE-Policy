@@ -171,6 +171,67 @@ def _positive_float(payload: dict[str, Any], key: str, default: float) -> float:
     return number
 
 
+def _camera_calibration(value: Any) -> dict[str, Any] | None:
+    """Validate the optional camera calibration without importing NumPy."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigValidationError("camera_calibration must be an object or null")
+    cameras = value.get("cameras")
+    if not isinstance(cameras, dict):
+        raise ConfigValidationError("camera_calibration.cameras must be an object")
+    required = {"left_wrist", "right_wrist", "head"}
+    missing = sorted(required - set(cameras))
+    if missing:
+        raise ConfigValidationError(
+            "camera_calibration.cameras is missing: " + ", ".join(missing)
+        )
+    normalized_cameras: dict[str, Any] = {}
+    for name in sorted(required):
+        camera = cameras[name]
+        if not isinstance(camera, dict):
+            raise ConfigValidationError(f"camera_calibration.cameras.{name} must be an object")
+        resolution = camera.get("resolution")
+        if (
+            not isinstance(resolution, list)
+            or len(resolution) != 2
+            or any(isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in resolution)
+        ):
+            raise ConfigValidationError(
+                f"camera_calibration.cameras.{name}.resolution must be [width, height]"
+            )
+        matrix = camera.get("intrinsics")
+        if not isinstance(matrix, list) or len(matrix) != 3 or any(
+            not isinstance(row, list) or len(row) != 3 for row in matrix
+        ):
+            raise ConfigValidationError(
+                f"camera_calibration.cameras.{name}.intrinsics must be a 3x3 matrix"
+            )
+        try:
+            numeric = [[float(item) for item in row] for row in matrix]
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(
+                f"camera_calibration.cameras.{name}.intrinsics must contain numbers"
+            ) from exc
+        if not all(math.isfinite(item) for row in numeric for item in row):
+            raise ConfigValidationError(
+                f"camera_calibration.cameras.{name}.intrinsics must contain finite numbers"
+            )
+        if numeric[0][0] <= 0.0 or numeric[1][1] <= 0.0 or numeric[2] != [0.0, 0.0, 1.0]:
+            raise ConfigValidationError(
+                f"camera_calibration.cameras.{name}.intrinsics is not a valid pinhole matrix"
+            )
+        normalized_cameras[name] = {
+            "resolution": [int(resolution[0]), int(resolution[1])],
+            "intrinsics": numeric,
+        }
+    return {
+        "source": str(value.get("source") or "configured calibration"),
+        "coordinate_frame": str(value.get("coordinate_frame") or "robot_base"),
+        "cameras": normalized_cameras,
+    }
+
+
 def validate_driver_config(payload: Any) -> dict[str, Any]:
     """Validate and normalize the ``driver_config.json`` object.
 
@@ -207,6 +268,9 @@ def validate_driver_config(payload: Any) -> dict[str, Any]:
         "observation_publish_interval": _positive_int(
             raw, "observation_publish_interval", 5
         ),
+        "camera_calibration": _camera_calibration(raw.get("camera_calibration")),
+        "r1pro_urdf_path": raw.get("r1pro_urdf_path"),
+        "primitive_max_steps": _positive_int(raw, "primitive_max_steps", 240),
         "execution_timeout_s": _positive_float(raw, "execution_timeout_s", 1800.0),
         "progress_timeout_s": _positive_float(raw, "progress_timeout_s", 300.0),
         "state_sync_timeout_s": _positive_float(raw, "state_sync_timeout_s", 120.0),

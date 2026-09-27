@@ -15,8 +15,8 @@ Two properties matter for correctness:
 from __future__ import annotations
 
 import json
-import math
 import os
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,7 +27,14 @@ CAMERA_KEYS = {
     "right_wrist": "robot::robot:right_realsense_link:Camera:0::rgb",
 }
 
-MANIFEST_SCHEMA = "Emerge.behavior_camera_observation.v1"
+# BatchedEvaluator concatenates camera poses in the order declared by
+# eval.camera_sensor_names in dev/behavior_r1pro_openpi.yaml.
+CAMERA_POSE_ORDER = ("left_wrist", "right_wrist", "head")
+CAMERA_POSE_KEY = "robot::cam_rel_poses"
+PROPRIO_KEYS = ("robot::proprio", "robot::robot:proprio")
+R1PRO_PROPRIO_DIM = 61
+
+MANIFEST_SCHEMA = "Emerge.behavior_camera_observation.v2"
 
 #: How many published revisions of each camera to keep on disk.
 DEFAULT_KEEP_REVISIONS = 4
@@ -70,13 +77,107 @@ def _as_rgb_uint8(value: Any):
     return np.ascontiguousarray(np.clip(image, 0, 255).astype(np.uint8))
 
 
-def _approximate_intrinsics(width: int, height: int, horizontal_fov_degrees: float = 40.0):
-    focal = width / (2.0 * math.tan(math.radians(horizontal_fov_degrees) / 2.0))
+def _scaled_intrinsics(camera: dict[str, Any], width: int, height: int) -> list[list[float]]:
+    """Scale a pinhole calibration when the published image was resized."""
+    reference_width, reference_height = camera["resolution"]
+    scale_x = float(width) / float(reference_width)
+    scale_y = float(height) / float(reference_height)
+    matrix = camera["intrinsics"]
     return [
-        [focal, 0.0, (width - 1) / 2.0],
-        [0.0, focal, (height - 1) / 2.0],
+        [float(matrix[0][0]) * scale_x, 0.0, float(matrix[0][2]) * scale_x],
+        [0.0, float(matrix[1][1]) * scale_y, float(matrix[1][2]) * scale_y],
         [0.0, 0.0, 1.0],
     ]
+
+
+def _as_vector(value: Any, *, name: str):
+    import numpy as np
+
+    vector = np.asarray(value, dtype=np.float64)
+    while vector.ndim > 1 and vector.shape[0] == 1:
+        vector = vector[0]
+    if vector.ndim != 1:
+        raise ValueError(f"{name} must be a vector, got shape {vector.shape}")
+    if not np.all(np.isfinite(vector)):
+        raise ValueError(f"{name} contains non-finite values")
+    return vector
+
+
+def _pose_matrix(position, quaternion):
+    import numpy as np
+
+    position = np.asarray(position, dtype=np.float64)
+    quaternion = np.asarray(quaternion, dtype=np.float64)
+    norm = float(np.linalg.norm(quaternion))
+    if position.shape != (3,) or quaternion.shape != (4,) or norm < 1e-12:
+        raise ValueError("camera pose must contain xyz and a non-zero xyzw quaternion")
+    x, y, z, w = quaternion / norm
+    rotation = np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, :3] = rotation
+    transform[:3, 3] = position
+    return transform
+
+
+def _camera_transforms(payload: dict[str, Any]) -> dict[str, list[list[float]]]:
+    if CAMERA_POSE_KEY not in payload:
+        return {}
+    poses = _as_vector(payload[CAMERA_POSE_KEY], name=CAMERA_POSE_KEY)
+    expected = 7 * len(CAMERA_POSE_ORDER)
+    if poses.size != expected:
+        raise ValueError(f"{CAMERA_POSE_KEY} must have {expected} values, got {poses.size}")
+    return {
+        name: _pose_matrix(pose[:3], pose[3:]).tolist()
+        for name, pose in zip(CAMERA_POSE_ORDER, poses.reshape(-1, 7), strict=True)
+    }
+
+
+def _r1pro_robot_state(payload: dict[str, Any]) -> dict[str, Any] | None:
+    source_key = next((key for key in PROPRIO_KEYS if key in payload), None)
+    if source_key is None:
+        return None
+    state = _as_vector(payload[source_key], name=source_key)
+    if state.size != R1PRO_PROPRIO_DIM:
+        raise ValueError(
+            f"{source_key} must have {R1PRO_PROPRIO_DIM} values, got {state.size}"
+        )
+
+    def values(start: int, stop: int) -> list[float]:
+        return state[start:stop].astype(float).tolist()
+
+    return {
+        "source_observation_key": source_key,
+        "coordinate_frame": "robot_base",
+        "proprio_dim": R1PRO_PROPRIO_DIM,
+        "proprio": state.astype(float).tolist(),
+        "base_qvel": values(0, 3),
+        "trunk": {"qpos": values(53, 57), "qvel": values(57, 61)},
+        "arms": {
+            "left": {
+                "qpos": values(3, 10),
+                "qvel": values(10, 17),
+                "eef_position": values(17, 20),
+                "eef_orientation_xyzw": values(20, 24),
+                "gripper_qpos": values(24, 26),
+                "gripper_qvel": values(26, 28),
+            },
+            "right": {
+                "qpos": values(28, 35),
+                "qvel": values(35, 42),
+                "eef_position": values(42, 45),
+                "eef_orientation_xyzw": values(45, 49),
+                "gripper_qpos": values(49, 51),
+                "gripper_qvel": values(51, 53),
+            },
+        },
+    }
 
 
 class ObservationPublisher:
@@ -88,17 +189,21 @@ class ObservationPublisher:
         *,
         publish_interval: int = 5,
         keep_revisions: int = DEFAULT_KEEP_REVISIONS,
+        camera_calibration: dict[str, Any] | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self.publish_interval = int(publish_interval)
         if self.publish_interval < 1:
             raise ValueError("publish_interval must be positive")
         self.keep_revisions = max(1, int(keep_revisions))
+        self.camera_calibration = camera_calibration
         self.manifest_path = self.workspace / "artifacts/observations/observation.json"
         self._observation_count = 0
         self._revision = 0
         self._episode_id = 0
         self._latest: dict[str, Any] = {}
+        self._latest_camera_transforms: dict[str, list[list[float]]] = {}
+        self._latest_robot_state: dict[str, Any] | None = None
         self._captured_at: str | None = None
         self._latest_captured_at: str | None = None
         self._latest_observation_count = 0
@@ -125,6 +230,8 @@ class ObservationPublisher:
         """Start a new episode; frames from the previous one must not leak."""
         self._episode_id += 1
         self._latest = {}
+        self._latest_camera_transforms = {}
+        self._latest_robot_state = None
         self._latest_captured_at = None
         self._latest_observation_count = 0
         self.last_error = None
@@ -155,9 +262,21 @@ class ObservationPublisher:
                 if failures:
                     self.last_error = "no decodable camera view (" + ", ".join(failures) + ")"
                 return
+            try:
+                camera_transforms = _camera_transforms(payload)
+            except ValueError as exc:
+                camera_transforms = {}
+                failures.append(f"camera_poses:{exc}")
+            try:
+                robot_state = _r1pro_robot_state(payload)
+            except ValueError as exc:
+                robot_state = None
+                failures.append(f"proprio:{exc}")
             self._observation_count += 1
             self._captured_at = _utc_now()
             self._latest = images
+            self._latest_camera_transforms = camera_transforms
+            self._latest_robot_state = robot_state
             self._latest_captured_at = self._captured_at
             self._latest_observation_count = self._observation_count
             self.last_warning = ", ".join(failures) if failures else None
@@ -189,23 +308,33 @@ class ObservationPublisher:
                 )
                 Image.fromarray(image, mode="RGB").save(temporary_image, format="PNG")
                 os.replace(temporary_image, image_path)
-                views.append(
-                    {
-                        "name": name,
-                        "image_path": image_path.relative_to(self.workspace).as_posix(),
-                        "width": width,
-                        "height": height,
-                        "intrinsics": _approximate_intrinsics(width, height),
-                        "T_world_camera": [
-                            [1.0, 0.0, 0.0, 0.0],
-                            [0.0, 1.0, 0.0, 0.0],
-                            [0.0, 0.0, 1.0, 0.0],
-                            [0.0, 0.0, 0.0, 1.0],
-                        ],
-                        "calibrated": False,
-                        "source_observation_key": CAMERA_KEYS[name],
-                    }
+                configured_camera = (
+                    self.camera_calibration.get("cameras", {}).get(name)
+                    if self.camera_calibration
+                    else None
                 )
+                view = {
+                    "name": name,
+                    "image_path": image_path.relative_to(self.workspace).as_posix(),
+                    "width": width,
+                    "height": height,
+                    "intrinsics": (
+                        _scaled_intrinsics(configured_camera, width, height)
+                        if configured_camera
+                        else None
+                    ),
+                    "intrinsics_calibrated": configured_camera is not None,
+                    "extrinsics_calibrated": name in self._latest_camera_transforms,
+                    "calibrated": configured_camera is not None
+                    and name in self._latest_camera_transforms,
+                    "source_observation_key": CAMERA_KEYS[name],
+                }
+                if name in self._latest_camera_transforms:
+                    # Existing localization services call this field
+                    # T_world_camera. For BEHAVIOR its declared world frame is
+                    # the current robot base, as recorded by coordinate_frame.
+                    view["T_world_camera"] = self._latest_camera_transforms[name]
+                views.append(view)
             if not views:
                 return None
             manifest = {
@@ -215,8 +344,18 @@ class ObservationPublisher:
                 "episode_id": self._episode_id,
                 "captured_at": self._latest_captured_at or _utc_now(),
                 "reference_view": "head" if "head" in self._latest else views[0]["name"],
-                "calibrated": False,
+                "coordinate_frame": "robot_base",
+                "camera_pose_source": CAMERA_POSE_KEY,
+                "extrinsics_calibrated": bool(views)
+                and all(view["extrinsics_calibrated"] for view in views),
+                "intrinsics_calibrated": bool(views)
+                and all(view["intrinsics_calibrated"] for view in views),
+                "calibration_source": (
+                    self.camera_calibration.get("source") if self.camera_calibration else None
+                ),
+                "calibrated": bool(views) and all(view["calibrated"] for view in views),
                 "views": views,
+                "robot_state": self._latest_robot_state,
             }
             self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
             temporary_manifest = self.manifest_path.with_name(
@@ -249,9 +388,50 @@ class ObservationPublisher:
             "captured_at": self._latest_captured_at,
             "manifest_path": str(self.manifest_path),
             "views": list(self._latest),
+            "coordinate_frame": "robot_base",
+            "extrinsics_calibrated": bool(self._latest)
+            and all(name in self._latest_camera_transforms for name in self._latest),
+            "intrinsics_calibrated": bool(self.camera_calibration)
+            and all(
+                name in self.camera_calibration.get("cameras", {})
+                for name in self._latest
+            ),
+            "robot_state": self._latest_robot_state,
             "last_error": self.last_error,
             "last_warning": self.last_warning,
         }
+
+    def current_hold_action(self) -> list[float]:
+        """Build one legal 23-D R1Pro action that holds the latest joint pose."""
+        state = self._latest_robot_state
+        if state is None:
+            raise RuntimeError("no R1Pro proprioception has been observed yet")
+
+        def gripper_command(values: list[float]) -> float:
+            # The official smooth gripper controller maps [-1, 1] onto a
+            # per-finger [0.0, 0.05] position. Proprio stores both fingers.
+            width = float(sum(values))
+            return max(-1.0, min(1.0, 2.0 * width / 0.1 - 1.0))
+
+        left = state["arms"]["left"]
+        right = state["arms"]["right"]
+        action = (
+            [0.0, 0.0, 0.0]
+            + list(state["trunk"]["qpos"])
+            + list(left["qpos"])
+            + [gripper_command(left["gripper_qpos"])]
+            + list(right["qpos"])
+            + [gripper_command(right["gripper_qpos"])]
+        )
+        if len(action) != 23:
+            raise RuntimeError(f"internal R1Pro hold action has {len(action)} values, expected 23")
+        return [float(value) for value in action]
+
+    def current_robot_state(self) -> dict[str, Any]:
+        state = self._latest_robot_state
+        if state is None:
+            raise RuntimeError("no R1Pro proprioception has been observed yet")
+        return copy.deepcopy(state)
 
 
 def _prune_revisions(directory: Path, name: str, *, keep: int) -> None:
