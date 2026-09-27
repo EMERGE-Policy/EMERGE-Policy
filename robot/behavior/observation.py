@@ -142,7 +142,10 @@ def _pose_matrix(position, quaternion):
         dtype=np.float64,
     )
     transform = np.eye(4, dtype=np.float64)
-    transform[:3, :3] = rotation
+    # OmniGibson reports the camera prim pose, while pinhole backprojection
+    # uses the optical convention. Match the official depth_to_pcd helper by
+    # applying its 180-degree rotation about camera X.
+    transform[:3, :3] = rotation @ np.diag([1.0, -1.0, -1.0])
     transform[:3, 3] = position
     return transform
 

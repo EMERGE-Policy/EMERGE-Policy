@@ -1,6 +1,7 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -45,6 +46,7 @@ class ObjectLocationSubagentConfig(Base):
     """Runtime settings for the Object Location Subagent."""
 
     model: str | None = None
+    geometry_backend: Literal["auto", "vggt", "rgbd"] = "auto"
     vggt_url: str = "ws://localhost:8001"
     sam3_url: str = "ws://localhost:8002"
     timeout: float = 120.0

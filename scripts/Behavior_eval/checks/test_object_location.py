@@ -166,7 +166,7 @@ class BehaviorObjectLocationCompatibilityTest(unittest.TestCase):
             observation = ObservationStore(workspace).load()
             self.assertFalse(observation.has_rgbd)
 
-    def test_segment_candidates_sends_three_views_to_both_models(self) -> None:
+    def test_rgbd_observation_sends_views_to_sam3_without_calling_vggt(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             _publish_behavior_observation(workspace)
@@ -195,14 +195,83 @@ class BehaviorObjectLocationCompatibilityTest(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(len(vggt.requests), 1)
+            self.assertEqual(len(vggt.requests), 0)
             self.assertEqual(len(sam3.requests), 1)
-            self.assertEqual(len(vggt.requests[0]["views"]), 3)
             self.assertEqual(len(sam3.requests[0]["views"]), 3)
-            self.assertEqual(vggt.requests[0]["reference_view"], "head")
-            for view in vggt.requests[0]["views"]:
-                self.assertEqual(view["intrinsics"].shape, (3, 3))
-                self.assertEqual(view["T_world_camera"].shape, (4, 4))
+            self.assertEqual(engine._active_geometry_backend, "rgbd")
+
+    def test_rgbd_engine_localizes_verified_masks_without_vggt(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            store = ObservationStore(workspace)
+            store.load()
+            engine = LocationEngine(
+                store,
+                vggt_url="ws://unused:8001",
+                sam3_url="ws://unused:8002",
+                timeout=1.0,
+                point_conf_threshold=0.3,
+                min_points=10,
+                bbox_padding_pixels=0,
+                view_center_tolerance_m=0.08,
+                ray_consensus_tolerance_m=0.02,
+                min_consistent_views=2,
+            )
+            mask = np.ones((224, 224), dtype=bool)
+            sam3 = _RecordingClient(
+                {
+                    "views": [
+                        {
+                            "view_name": name,
+                            "image_shape": [224, 224],
+                            "targets": [
+                                {
+                                    "object_key": "radio_1",
+                                    "prompt": "black radio",
+                                    "found": True,
+                                    "confidence": 0.95,
+                                    "instance_index": 1,
+                                    "mask": mask,
+                                    "bbox_2d": [0, 0, 223, 223],
+                                    "area_pixels": int(mask.sum()),
+                                }
+                            ],
+                        }
+                        for name in ("head", "left_wrist", "right_wrist")
+                    ]
+                }
+            )
+            vggt = _RecordingClient({})
+            engine._sam3 = sam3
+            engine._vggt = vggt
+            asyncio.run(
+                engine.segment_candidates(
+                    [{"candidate_id": "radio_1", "target_key": "radio", "prompt": "black radio"}]
+                )
+            )
+
+            result = engine.locate_candidates(
+                [
+                    {
+                        "object_key": "radio",
+                        "candidate_id": "radio_1",
+                        "verified_instances": [
+                            {"view_name": "head", "instance_index": 1},
+                            {"view_name": "left_wrist", "instance_index": 1},
+                        ],
+                    }
+                ]
+            )
+
+            self.assertEqual(vggt.requests, [])
+            self.assertEqual(result["geometry_alignment"]["method"], "calibrated_rgbd")
+            self.assertTrue(result["objects"][0]["found"])
+            self.assertEqual(result["objects"][0]["frame"], "robot_base")
+            self.assertEqual(
+                result["objects"][0]["position_type"],
+                "visible_surface_bbox_center",
+            )
 
     def test_location_result_uses_the_manifest_coordinate_frame(self) -> None:
         with TemporaryDirectory() as temporary:

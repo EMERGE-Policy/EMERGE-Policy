@@ -1,4 +1,4 @@
-"""Precise object localization backed by VGGT and SAM3 servers."""
+"""Precise object localization from SAM3 masks and calibrated geometry."""
 
 from Emerge.subagents.object_location.tools.location.engine import (
     CandidateSegmentation,

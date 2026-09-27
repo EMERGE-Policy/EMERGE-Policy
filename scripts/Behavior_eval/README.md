@@ -147,19 +147,20 @@ installation in `/data/yxy/envs/behavior` to configure its own paths.
 
 ## Perception services for measured approach
 
-The π0.5-only fallback works without the perception servers. To enable measured
-object localization, start VGGT and SAM3 on their reserved ports before the
-episode:
+The π0.5-only fallback works without the perception server. BEHAVIOR geometry
+comes directly from the official aligned `depth_linear` observations, so this
+pipeline does not start or call VGGT. To enable prompted object masks, start
+SAM3 on its reserved port before the episode:
 
 ```bash
 cd /data/yxy/EMERGE-Humanoid
-VGGT_GPU=0 SAM3_GPU=0 \
-  bash scripts/model_server/start_external_model_servers.sh --services vggt,sam3
+SAM3_GPU=0 \
+  bash scripts/model_server/start_external_model_servers.sh --services sam3
 ```
 
-This requires the `EmergePolicy` environment and
-`checkpoints/vggt/model.pt` plus `checkpoints/sam3/model.pt`. On a single GPU,
-both services can share GPU 0 if memory permits. If either service is absent or
+The existing SAM3 checkpoint on this machine is under
+`/home/embodied/.cache/modelscope/hub/models/facebook/sam3`. TASK-04 wires that
+local checkpoint into the persistent EMERGE server. If SAM3 is absent or
 localization cannot confirm the control, the Agent follows the skill's bounded
 VLA fallback instead of inventing coordinates.
 

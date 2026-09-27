@@ -1,4 +1,4 @@
-"""VGGT + SAM3 orchestration for candidate-based object localization."""
+"""SAM3 segmentation with RGB-D or VGGT geometry for object localization."""
 
 from __future__ import annotations
 
@@ -15,6 +15,9 @@ from Emerge.subagents.object_location.tools.location.client import (
 from Emerge.subagents.object_location.tools.location.pose import (
     estimate_object_locations,
 )
+from Emerge.subagents.object_location.tools.location.rgbd_geometry import (
+    estimate_rgbd_object_locations,
+)
 from Emerge.subagents.object_location.tools.observation import (
     ObservationStore,
 )
@@ -22,7 +25,7 @@ from Emerge.subagents.object_location.tools.observation import (
 
 @dataclass(slots=True)
 class CandidateSegmentation:
-    """SAM3 masks and VGGT geometry cached for one candidate round."""
+    """SAM3 masks and calibrated geometry cached for one candidate round."""
 
     candidates: tuple[dict[str, str], ...]
     geometry: dict[str, Any]
@@ -43,6 +46,7 @@ class LocationEngine:
         view_center_tolerance_m: float,
         ray_consensus_tolerance_m: float,
         min_consistent_views: int,
+        geometry_backend: str = "auto",
     ) -> None:
         self._store = store
         self._vggt = ModelServerClient(vggt_url, timeout=timeout)
@@ -53,6 +57,10 @@ class LocationEngine:
         self._view_center_tolerance_m = view_center_tolerance_m
         self._ray_consensus_tolerance_m = ray_consensus_tolerance_m
         self._min_consistent_views = min_consistent_views
+        if geometry_backend not in {"auto", "vggt", "rgbd"}:
+            raise ValueError("geometry_backend must be 'auto', 'vggt', or 'rgbd'")
+        self._geometry_backend = geometry_backend
+        self._active_geometry_backend: str | None = None
         self._geometry: dict[str, Any] | None = None
         self._segmentation: CandidateSegmentation | None = None
 
@@ -60,6 +68,7 @@ class LocationEngine:
         """Clear all model outputs cached for the previous sub-agent run."""
         self._geometry = None
         self._segmentation = None
+        self._active_geometry_backend = None
 
     async def segment_candidates(
         self,
@@ -158,18 +167,27 @@ class LocationEngine:
             self._segmentation.masks,
             selections,
         )
-        objects = estimate_object_locations(
-            self._segmentation.geometry,
-            selected_masks,
-            targets,
-            point_conf_threshold=self._point_conf_threshold,
-            min_points=self._min_points,
-            bbox_padding_pixels=self._bbox_padding_pixels,
-            view_center_tolerance_m=self._view_center_tolerance_m,
-            ray_consensus_tolerance_m=self._ray_consensus_tolerance_m,
-            min_consistent_views=self._min_consistent_views,
-        )
         observation = self._store.current()
+        if self._active_geometry_backend == "rgbd":
+            objects = estimate_rgbd_object_locations(
+                observation,
+                selected_masks,
+                targets,
+                min_points=self._min_points,
+                min_consistent_views=self._min_consistent_views,
+            )
+        else:
+            objects = estimate_object_locations(
+                self._segmentation.geometry,
+                selected_masks,
+                targets,
+                point_conf_threshold=self._point_conf_threshold,
+                min_points=self._min_points,
+                bbox_padding_pixels=self._bbox_padding_pixels,
+                view_center_tolerance_m=self._view_center_tolerance_m,
+                ray_consensus_tolerance_m=self._ray_consensus_tolerance_m,
+                min_consistent_views=self._min_consistent_views,
+            )
         for result, selection in zip(objects, selections, strict=True):
             if result.get("found"):
                 # VGGT is aligned to the calibrated T_world_camera inputs.  In
@@ -199,6 +217,20 @@ class LocationEngine:
             return self._geometry
 
         observation = self._store.current()
+        backend = self._geometry_backend
+        if backend == "auto":
+            backend = "rgbd" if observation.has_rgbd else "vggt"
+        self._active_geometry_backend = backend
+        if backend == "rgbd":
+            self._geometry = {
+                "backend": "rgbd",
+                "reference_view": observation.reference_view,
+                "alignment": {
+                    "method": "calibrated_rgbd",
+                    "frame": observation.coordinate_frame,
+                },
+            }
+            return self._geometry
         started = time.perf_counter()
         self._geometry = await self._vggt.infer(
             {

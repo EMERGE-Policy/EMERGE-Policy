@@ -18,7 +18,7 @@ AgentLoop
           ├── 私有 context
           ├── object-localization skill
           ├── observe_scene
-          ├── segment_candidates → VGGT + SAM3 + 完整视角 overlays
+          ├── segment_candidates → RGB-D/VGGT geometry + SAM3 + 完整视角 overlays
           └── locate_candidates → 复用已确认候选的缓存 geometry/masks
           └── TaskVerificationSubagent
               ├── 私有 context

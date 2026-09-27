@@ -31,8 +31,8 @@ class LocateCandidatesTool(Tool):
             "full-view overlays and confirming which candidate is the requested "
             "semantic object. For every camera view, select the # instance whose "
             "mask covers that same physical object; ranks can change by view. "
-            "This tool reuses cached "
-            "VGGT geometry and SAM3 masks; it does not run either model again."
+            "This tool reuses cached calibrated geometry and SAM3 masks; it "
+            "does not run either model again."
         )
 
     @property

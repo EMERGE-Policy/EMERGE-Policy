@@ -52,6 +52,7 @@ def build_object_location_subagent(
             settings.get("ray_consensus_tolerance_m", 0.02)
         ),
         min_consistent_views=int(settings.get("min_consistent_views", 2)),
+        geometry_backend=str(settings.get("geometry_backend", "auto")),
     )
     observe_tool = ObserveSceneTool(store)
     candidate_tool = SegmentCandidatesTool(engine)

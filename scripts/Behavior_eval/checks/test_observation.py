@@ -190,7 +190,12 @@ class ObservationPublisherTest(unittest.TestCase):
             )
             np.testing.assert_allclose(
                 np.asarray(views["right_wrist"]["T_world_camera"])[:3, :3],
-                [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
+                atol=1e-6,
+            )
+            np.testing.assert_allclose(
+                np.asarray(views["head"]["T_world_camera"])[:3, :3],
+                np.diag([1.0, -1.0, -1.0]),
                 atol=1e-6,
             )
             self.assertTrue(all(view["extrinsics_calibrated"] for view in views.values()))

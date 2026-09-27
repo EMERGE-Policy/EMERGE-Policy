@@ -51,7 +51,7 @@ class SegmentCandidatesTool(Tool):
             "prompt can return up to two instances labeled #1 and #2 in each view. "
             "Do not choose the final semantic target before reviewing appearance "
             "and relation evidence in these overlays. All candidates are sent to "
-            "SAM3 together, while VGGT geometry is cached for localization."
+            "SAM3 together, while calibrated geometry is cached for localization."
         )
 
     @property
