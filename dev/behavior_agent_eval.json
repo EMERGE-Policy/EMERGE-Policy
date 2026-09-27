@@ -9,20 +9,20 @@
   "status_path": "~/.Emerge/workspace/BEHAVIOR_STATUS.json",
   "observation_publish_interval": 5,
   "camera_calibration": {
-    "source": "BEHAVIOR-1K v3.9.3 R1Pro evaluation intrinsics scaled to DefaultWrapper 224x224 observations",
+    "source": "BEHAVIOR-1K v3.9.3 R1Pro RGBDFullResWrapper camera intrinsics",
     "coordinate_frame": "robot_base",
     "cameras": {
       "left_wrist": {
-        "resolution": [224, 224],
-        "intrinsics": [[181.37648666666666, 0.0, 112.0], [0.0, 181.37648666666666, 112.0], [0.0, 0.0, 1.0]]
+        "resolution": [480, 480],
+        "intrinsics": [[388.6639, 0.0, 240.0], [0.0, 388.6639, 240.0], [0.0, 0.0, 1.0]]
       },
       "right_wrist": {
-        "resolution": [224, 224],
-        "intrinsics": [[181.37648666666666, 0.0, 112.0], [0.0, 181.37648666666666, 112.0], [0.0, 0.0, 1.0]]
+        "resolution": [480, 480],
+        "intrinsics": [[388.6639, 0.0, 240.0], [0.0, 388.6639, 240.0], [0.0, 0.0, 1.0]]
       },
       "head": {
-        "resolution": [224, 224],
-        "intrinsics": [[95.2, 0.0, 112.0], [0.0, 95.2, 112.0], [0.0, 0.0, 1.0]]
+        "resolution": [720, 720],
+        "intrinsics": [[306.0, 0.0, 360.0], [0.0, 306.0, 360.0], [0.0, 0.0, 1.0]]
       }
     }
   },

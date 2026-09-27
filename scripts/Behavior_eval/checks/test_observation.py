@@ -25,6 +25,7 @@ def _pack_array(value):
 
 def _camera_message(seed: int = 0) -> bytes:
     image = np.full((4, 5, 3), seed, dtype=np.uint8)
+    depth = np.full((1, 4, 5, 1), 0.5 + seed, dtype=np.float32)
     camera_poses = np.array(
         [
             1.0,
@@ -56,6 +57,9 @@ def _camera_message(seed: int = 0) -> bytes:
             "robot::robot:zed_link:Camera:0::rgb": image,
             "robot::robot:left_realsense_link:Camera:0::rgb": image,
             "robot::robot:right_realsense_link:Camera:0::rgb": image,
+            "robot::robot:zed_link:Camera:0::depth_linear": depth,
+            "robot::robot:left_realsense_link:Camera:0::depth_linear": depth,
+            "robot::robot:right_realsense_link:Camera:0::depth_linear": depth,
             "robot::cam_rel_poses": camera_poses,
             "robot::proprio": np.arange(61, dtype=np.float32)[None, :],
         },
@@ -102,7 +106,9 @@ class ObservationPublisherTest(unittest.TestCase):
             for seed in range(3):
                 publisher.capture(_camera_message(seed=seed))
             images = sorted((workspace / "artifacts/cameras/head").glob("head.*.png"))
+            depths = sorted((workspace / "artifacts/depth/head").glob("head.*.npy"))
             self.assertEqual(len(images), 2)
+            self.assertEqual(len(depths), 2)
             manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
             self.assertTrue((workspace / manifest["views"][0]["image_path"]).is_file())
             self.assertIn(
@@ -121,6 +127,47 @@ class ObservationPublisherTest(unittest.TestCase):
                 self.assertIn(f".{revision:06d}.png", view["image_path"])
                 with Image.open(workspace / view["image_path"]) as saved:
                     self.assertEqual(saved.size, (5, 4))
+
+    def test_linear_depth_is_saved_losslessly_with_the_rgb_revision(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            publisher = self._publisher(workspace)
+            publisher.capture(_camera_message(seed=2))
+            manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(manifest["rgbd"])
+            revision = manifest["revision"]
+            for view in manifest["views"]:
+                self.assertTrue(view["depth_available"])
+                self.assertEqual(view["depth_unit"], "meter")
+                self.assertIn(f".{revision:06d}.npy", view["depth_path"])
+                depth = np.load(workspace / view["depth_path"], allow_pickle=False)
+                self.assertEqual(depth.dtype, np.float32)
+                self.assertEqual(depth.shape, (4, 5))
+                np.testing.assert_array_equal(depth, np.full((4, 5), 2.5, dtype=np.float32))
+
+    def test_depth_with_a_different_shape_is_not_published(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            publisher = self._publisher(workspace)
+            payload = msgpack.unpackb(
+                _camera_message(), raw=False, object_hook=lambda item: np.ndarray(
+                    buffer=item[b"data"],
+                    dtype=np.dtype(item[b"dtype"]),
+                    shape=item[b"shape"],
+                ) if item.get(b"__ndarray__") else item,
+            )
+            payload["robot::robot:zed_link:Camera:0::depth_linear"] = np.ones(
+                (3, 3), dtype=np.float32
+            )
+            publisher.capture(msgpack.packb(payload, default=_pack_array))
+            manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+            views = {view["name"]: view for view in manifest["views"]}
+
+            self.assertFalse(manifest["rgbd"])
+            self.assertFalse(views["head"]["depth_available"])
+            self.assertNotIn("depth_path", views["head"])
+            self.assertIn("head:depth_shape", publisher.snapshot()["last_warning"])
 
     def test_camera_poses_are_published_in_the_robot_base_frame(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -265,6 +312,7 @@ class ObservationPublisherTest(unittest.TestCase):
             publisher.note_reset()
             self.assertEqual(publisher.snapshot()["episode_id"], 1)
             self.assertEqual(publisher.snapshot()["views"], [])
+            self.assertEqual(publisher.snapshot()["depth_views"], [])
             self.assertIsNone(publisher.snapshot()["robot_state"])
 
     def test_invalid_publish_interval_is_rejected(self) -> None:

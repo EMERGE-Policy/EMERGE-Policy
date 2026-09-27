@@ -27,6 +27,11 @@ CAMERA_KEYS = {
     "right_wrist": "robot::robot:right_realsense_link:Camera:0::rgb",
 }
 
+DEPTH_KEYS = {
+    name: key.removesuffix("::rgb") + "::depth_linear"
+    for name, key in CAMERA_KEYS.items()
+}
+
 # BatchedEvaluator concatenates camera poses in the order declared by
 # eval.camera_sensor_names in dev/behavior_r1pro_openpi.yaml.
 CAMERA_POSE_ORDER = ("left_wrist", "right_wrist", "head")
@@ -34,7 +39,7 @@ CAMERA_POSE_KEY = "robot::cam_rel_poses"
 PROPRIO_KEYS = ("robot::proprio", "robot::robot:proprio")
 R1PRO_PROPRIO_DIM = 61
 
-MANIFEST_SCHEMA = "Emerge.behavior_camera_observation.v2"
+MANIFEST_SCHEMA = "Emerge.behavior_camera_observation.v3"
 
 #: How many published revisions of each camera to keep on disk.
 DEFAULT_KEEP_REVISIONS = 4
@@ -75,6 +80,22 @@ def _as_rgb_uint8(value: Any):
         if finite_max <= 1.0:
             image = image * 255.0
     return np.ascontiguousarray(np.clip(image, 0, 255).astype(np.uint8))
+
+
+def _as_depth_float32(value: Any):
+    """Normalize one batched or channelized linear-depth image to HxW metres."""
+    import numpy as np
+
+    depth = np.asarray(value)
+    while depth.ndim > 2 and depth.shape[0] == 1:
+        depth = depth[0]
+    if depth.ndim == 3 and depth.shape[-1] == 1:
+        depth = depth[..., 0]
+    if depth.ndim != 2:
+        raise ValueError(f"expected an HW depth image, got shape {depth.shape}")
+    if depth.dtype.kind not in "fiu":
+        raise ValueError(f"expected numeric linear depth, got dtype {depth.dtype}")
+    return np.ascontiguousarray(depth.astype(np.float32, copy=False))
 
 
 def _scaled_intrinsics(camera: dict[str, Any], width: int, height: int) -> list[list[float]]:
@@ -202,6 +223,7 @@ class ObservationPublisher:
         self._revision = 0
         self._episode_id = 0
         self._latest: dict[str, Any] = {}
+        self._latest_depths: dict[str, Any] = {}
         self._latest_camera_transforms: dict[str, list[list[float]]] = {}
         self._latest_robot_state: dict[str, Any] | None = None
         self._captured_at: str | None = None
@@ -230,6 +252,7 @@ class ObservationPublisher:
         """Start a new episode; frames from the previous one must not leak."""
         self._episode_id += 1
         self._latest = {}
+        self._latest_depths = {}
         self._latest_camera_transforms = {}
         self._latest_robot_state = None
         self._latest_captured_at = None
@@ -249,6 +272,7 @@ class ObservationPublisher:
             if not isinstance(payload, dict) or payload.get("reset") is True:
                 return
             images: dict[str, Any] = {}
+            depths: dict[str, Any] = {}
             failures: list[str] = []
             for name, key in CAMERA_KEYS.items():
                 if key not in payload:
@@ -262,6 +286,24 @@ class ObservationPublisher:
                 if failures:
                     self.last_error = "no decodable camera view (" + ", ".join(failures) + ")"
                 return
+            for name, key in DEPTH_KEYS.items():
+                if key not in payload:
+                    failures.append(f"{name}:depth_missing")
+                    continue
+                try:
+                    depth = _as_depth_float32(payload[key]).copy()
+                    image = images.get(name)
+                    if image is None:
+                        failures.append(f"{name}:depth_without_rgb")
+                        continue
+                    if depth.shape != image.shape[:2]:
+                        failures.append(
+                            f"{name}:depth_shape_{depth.shape}_rgb_shape_{image.shape[:2]}"
+                        )
+                        continue
+                    depths[name] = depth
+                except Exception as exc:
+                    failures.append(f"{name}:depth_{type(exc).__name__}")
             try:
                 camera_transforms = _camera_transforms(payload)
             except ValueError as exc:
@@ -275,6 +317,7 @@ class ObservationPublisher:
             self._observation_count += 1
             self._captured_at = _utc_now()
             self._latest = images
+            self._latest_depths = depths
             self._latest_camera_transforms = camera_transforms
             self._latest_robot_state = robot_state
             self._latest_captured_at = self._captured_at
@@ -308,6 +351,20 @@ class ObservationPublisher:
                 )
                 Image.fromarray(image, mode="RGB").save(temporary_image, format="PNG")
                 os.replace(temporary_image, image_path)
+                depth = self._latest_depths.get(name)
+                depth_path = None
+                if depth is not None:
+                    depth_dir = self.workspace / "artifacts/depth" / name
+                    depth_dir.mkdir(parents=True, exist_ok=True)
+                    depth_path = depth_dir / f"{name}.{revision:06d}.npy"
+                    temporary_depth = depth_path.with_name(
+                        f".{depth_path.stem}.{os.getpid()}.tmp.npy"
+                    )
+                    import numpy as np
+
+                    with temporary_depth.open("wb") as stream:
+                        np.save(stream, depth, allow_pickle=False)
+                    os.replace(temporary_depth, depth_path)
                 configured_camera = (
                     self.camera_calibration.get("cameras", {}).get(name)
                     if self.camera_calibration
@@ -328,7 +385,16 @@ class ObservationPublisher:
                     "calibrated": configured_camera is not None
                     and name in self._latest_camera_transforms,
                     "source_observation_key": CAMERA_KEYS[name],
+                    "depth_available": depth_path is not None,
                 }
+                if depth_path is not None:
+                    view.update(
+                        {
+                            "depth_path": depth_path.relative_to(self.workspace).as_posix(),
+                            "depth_unit": "meter",
+                            "source_depth_observation_key": DEPTH_KEYS[name],
+                        }
+                    )
                 if name in self._latest_camera_transforms:
                     # Existing localization services call this field
                     # T_world_camera. For BEHAVIOR its declared world frame is
@@ -354,6 +420,7 @@ class ObservationPublisher:
                     self.camera_calibration.get("source") if self.camera_calibration else None
                 ),
                 "calibrated": bool(views) and all(view["calibrated"] for view in views),
+                "rgbd": bool(views) and all(view["depth_available"] for view in views),
                 "views": views,
                 "robot_state": self._latest_robot_state,
             }
@@ -373,6 +440,13 @@ class ObservationPublisher:
                     self.workspace / "artifacts/cameras" / name,
                     name,
                     keep=self.keep_revisions,
+                    suffix="png",
+                )
+                _prune_revisions(
+                    self.workspace / "artifacts/depth" / name,
+                    name,
+                    keep=self.keep_revisions,
+                    suffix="npy",
                 )
             return self.manifest_path
         except Exception as exc:
@@ -388,6 +462,9 @@ class ObservationPublisher:
             "captured_at": self._latest_captured_at,
             "manifest_path": str(self.manifest_path),
             "views": list(self._latest),
+            "depth_views": list(self._latest_depths),
+            "rgbd": bool(self._latest)
+            and all(name in self._latest_depths for name in self._latest),
             "coordinate_frame": "robot_base",
             "extrinsics_calibrated": bool(self._latest)
             and all(name in self._latest_camera_transforms for name in self._latest),
@@ -434,10 +511,16 @@ class ObservationPublisher:
         return copy.deepcopy(state)
 
 
-def _prune_revisions(directory: Path, name: str, *, keep: int) -> None:
+def _prune_revisions(
+    directory: Path,
+    name: str,
+    *,
+    keep: int,
+    suffix: str,
+) -> None:
     """Keep only the newest ``keep`` published revisions of one camera."""
     try:
-        revisions = sorted(directory.glob(f"{name}.*.png"))
+        revisions = sorted(directory.glob(f"{name}.*.{suffix}"))
     except OSError:
         return
     for stale in revisions[:-keep]:

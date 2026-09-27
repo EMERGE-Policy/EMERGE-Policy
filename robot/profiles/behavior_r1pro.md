@@ -12,9 +12,10 @@ All measured positions used by the actions below must be in `robot_base`, the
 frame named by `artifacts/observations/observation.json`. In this frame +X is
 forward, +Y is left, and +Z is up. Never copy image pixels into a metric action.
 
-The observation manifest contains three calibrated views (`head`,
-`left_wrist`, and `right_wrist`), exact intrinsics for their published 224x224
-images, base-relative camera transforms, and structured R1Pro proprioception.
+The observation manifest contains three calibrated RGB-D views (`head`,
+`left_wrist`, and `right_wrist`), exact intrinsics for the official full
+resolution images, metre-valued `depth_linear` arrays, base-relative camera
+transforms, and structured R1Pro proprioception.
 `robots.behavior_r1pro` in `ROBOT_STATE.md` contains the live evaluator and
 gateway status. Read both files again after every physical action.
 

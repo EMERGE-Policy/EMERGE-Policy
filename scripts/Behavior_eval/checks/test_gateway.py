@@ -138,11 +138,15 @@ class B1KProxyGatewayTest(unittest.TestCase):
             )
             self.gateway.start()
             image = np.zeros((4, 5, 3), dtype=np.uint8)
+            depth = np.ones((4, 5, 1), dtype=np.float32)
             message = msgpack.packb(
                 {
                     "robot::robot:zed_link:Camera:0::rgb": image,
                     "robot::robot:left_realsense_link:Camera:0::rgb": image,
                     "robot::robot:right_realsense_link:Camera:0::rgb": image,
+                    "robot::robot:zed_link:Camera:0::depth_linear": depth,
+                    "robot::robot:left_realsense_link:Camera:0::depth_linear": depth,
+                    "robot::robot:right_realsense_link:Camera:0::depth_linear": depth,
                 },
                 default=pack_array,
             )
@@ -155,6 +159,12 @@ class B1KProxyGatewayTest(unittest.TestCase):
                 client.send(message)
                 self.assertEqual(client.recv(), b"action:" + message)
             self.assertTrue((Path(temporary) / "artifacts/observations/observation.json").is_file())
+            manifest = json.loads(
+                (Path(temporary) / "artifacts/observations/observation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(manifest["rgbd"])
 
     def test_controlled_gateway_waits_for_execution_and_honors_budget(self) -> None:
         from websockets.sync.client import connect

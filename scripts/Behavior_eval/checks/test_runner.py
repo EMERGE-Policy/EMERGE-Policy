@@ -248,18 +248,17 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             4,
         )
 
-    def test_checked_in_camera_intrinsics_match_official_default_wrapper(self) -> None:
+    def test_checked_in_camera_intrinsics_match_official_rgbd_wrapper(self) -> None:
         config_path = Path(__file__).resolve().parents[3] / "dev/behavior_agent_eval.json"
         driver_config = contracts.validate_driver_config(
             json.loads(config_path.read_text(encoding="utf-8"))
         )
         cameras = driver_config["camera_calibration"]["cameras"]
 
-        self.assertEqual(cameras["head"]["resolution"], [224, 224])
-        self.assertAlmostEqual(cameras["head"]["intrinsics"][0][0], 306.0 * 224 / 720)
-        self.assertAlmostEqual(
-            cameras["left_wrist"]["intrinsics"][0][0], 388.6639 * 224 / 480
-        )
+        self.assertEqual(cameras["head"]["resolution"], [720, 720])
+        self.assertEqual(cameras["left_wrist"]["resolution"], [480, 480])
+        self.assertAlmostEqual(cameras["head"]["intrinsics"][0][0], 306.0)
+        self.assertAlmostEqual(cameras["left_wrist"]["intrinsics"][0][0], 388.6639)
         self.assertEqual(cameras["right_wrist"], cameras["left_wrist"])
 
     def test_evaluator_command_targets_stock_behavior_393(self) -> None:
@@ -281,6 +280,10 @@ class NativeDriverConfigurationTest(unittest.TestCase):
         self.assertIn("/checkout/OmniGibson/omnigibson/eval/r1pro.yaml", command)
         self.assertIn("--write-video", command)
         self.assertIn("--no-headless", command)
+        self.assertEqual(
+            command[command.index("--env-wrapper") + 1],
+            "omnigibson.eval.wrappers.RGBDFullResWrapper",
+        )
 
     def test_openpi_robot_config_exposes_the_checkpoint_observation_names(self) -> None:
         import yaml
@@ -545,6 +548,7 @@ class VerifyArtifactsTest(unittest.TestCase):
         phase: str = "completed",
         recorded_success: bool | None = None,
         break_image: bool = False,
+        break_depth: bool = False,
         agent_success: bool | None = None,
     ) -> Path:
         import numpy as np
@@ -603,12 +607,22 @@ class VerifyArtifactsTest(unittest.TestCase):
             }
 
         image = np.zeros((4, 5, 3), dtype=np.uint8)
+        depth = np.ones((4, 5, 1), dtype=np.float32)
         publisher.capture(
-            msgpack.packb({"robot::robot:zed_link:Camera:0::rgb": image}, default=pack)
+            msgpack.packb(
+                {
+                    "robot::robot:zed_link:Camera:0::rgb": image,
+                    "robot::robot:zed_link:Camera:0::depth_linear": depth,
+                },
+                default=pack,
+            )
         )
         if break_image:
             manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
             (workspace / manifest["views"][0]["image_path"]).unlink()
+        if break_depth:
+            manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+            (workspace / manifest["views"][0]["depth_path"]).unlink()
 
         agent_success = success if agent_success is None else agent_success
         (root / "agent_episode_result.json").write_text(
@@ -658,6 +672,12 @@ class VerifyArtifactsTest(unittest.TestCase):
             root = self._episode(Path(temporary), break_image=True)
             failures = self._failures(verify_artifacts.verify(root))
             self.assertTrue(any("camera image exists" in message for message in failures))
+
+    def test_missing_depth_array_fails_for_the_rgbd_manifest(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = self._episode(Path(temporary), break_depth=True)
+            failures = self._failures(verify_artifacts.verify(root))
+            self.assertTrue(any("linear-depth array exists" in message for message in failures))
 
     def test_agent_result_disagreement_fails(self) -> None:
         with TemporaryDirectory() as temporary:

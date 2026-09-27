@@ -130,6 +130,24 @@ def verify(
             and f".{int(revision):06d}.png" not in str(view.get("image_path"))
         ]
         check(not mismatched, "every referenced image belongs to the published revision")
+        if manifest.get("schema_version") == "Emerge.behavior_camera_observation.v3":
+            check(bool(manifest.get("rgbd")), "the current observation contains aligned RGB-D")
+            missing_depth = [
+                str(view.get("depth_path"))
+                for view in views
+                if not (workspace / str(view.get("depth_path"))).is_file()
+            ]
+            check(not missing_depth, f"every referenced linear-depth array exists ({missing_depth})")
+            mismatched_depth = [
+                view.get("depth_path")
+                for view in views
+                if revision is not None
+                and f".{int(revision):06d}.npy" not in str(view.get("depth_path"))
+            ]
+            check(
+                not mismatched_depth,
+                "every referenced depth array belongs to the published revision",
+            )
 
     agent_path = output_dir / "agent_episode_result.json"
     agent = _read_json(agent_path)

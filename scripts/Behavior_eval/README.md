@@ -132,6 +132,10 @@ provide:
 
 The runner uses `--num-envs 1` and disables optional client-side action-chunk
 replay so that each gateway permit still corresponds to one simulator action.
+It selects BEHAVIOR's stock `RGBDFullResWrapper`: π0.5 continues to consume the
+three RGB keys and resizes them internally to 224x224, while EMERGE saves the
+aligned metre-valued `depth_linear` arrays as a read-only side copy. The raw
+websocket message forwarded to OpenPI is unchanged.
 It does not require patches or additional files in the BEHAVIOR repository.
 The checked-in `dev/behavior_r1pro_openpi.yaml` copies the official v3.9.3 R1Pro
 settings but names the runtime robot `robot`, because the public OpenPI wrapper
@@ -163,10 +167,10 @@ VLA fallback instead of inventing coordinates.
 
 - Only `turning_on_radio`, R1Pro, and the official single-task π0.5 checkpoint
   are wired into this entrypoint.
-- Camera extrinsics and the current R1Pro proprioception are copied from the
-  official evaluator observation into the manifest without changing the
-  OpenPI wire message. Extrinsics and localization results use the `robot_base`
-  coordinate frame; checked-in intrinsics match the official v3.9.3 wrapper at
-  the published 224x224 resolution.
+- Camera RGB, linear depth, extrinsics, and current R1Pro proprioception are
+  copied from the official evaluator observation into one revision-consistent
+  manifest without changing the OpenPI wire message. Extrinsics and
+  localization results use the `robot_base` coordinate frame; checked-in
+  intrinsics match the official v3.9.3 full-resolution RGB-D wrapper.
 - The BEHAVIOR evaluator and its R1Pro configuration remain external to this
   repository.

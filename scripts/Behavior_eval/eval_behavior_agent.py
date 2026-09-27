@@ -66,6 +66,7 @@ DEFAULT_DRIVER_CONFIG = EMERGE_ROOT / "dev/behavior_agent_eval.json"
 DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
 DEFAULT_GATEWAY_PORT = 8000
 DEFAULT_OPENPI_PORT = 8011
+BEHAVIOR_RGBD_WRAPPER = "omnigibson.eval.wrappers.RGBDFullResWrapper"
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -425,6 +426,8 @@ def _evaluator_command(
         "0",
         "--max-steps",
         str(max_steps),
+        "--env-wrapper",
+        BEHAVIOR_RGBD_WRAPPER,
         "--output-dir",
         str(output_dir),
         "--write-video" if write_video else "--no-write-video",
