@@ -26,6 +26,13 @@ WORKSPACE_ROOT = EMERGE_ROOT.parent
 if str(EMERGE_ROOT) not in sys.path:
     sys.path.insert(0, str(EMERGE_ROOT))
 
+from Emerge.runtime.configuration import load_runtime_config  # noqa: E402
+from Emerge.runtime.protocol import RunRequest, RunResult  # noqa: E402
+from Emerge.utils.action_queue import (  # noqa: E402
+    normalize_action_document,
+    parse_action_markdown,
+)
+from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
 from robot.behavior.contracts import (  # noqa: E402
     EVALUATION_STATUS_SCHEMA,
     OFFICIAL_PROMPT,
@@ -48,19 +55,12 @@ from scripts.Behavior_eval.runner_common import (  # noqa: E402
     require_executable,
     require_path,
     robot_state_section,
+    service_health_ok,
     spawn_process,
     stop_process_group,
     wait_for_condition,
     wait_for_health,
 )
-
-from Emerge.runtime.configuration import load_runtime_config  # noqa: E402
-from Emerge.runtime.protocol import RunRequest, RunResult  # noqa: E402
-from Emerge.utils.action_queue import (  # noqa: E402
-    normalize_action_document,
-    parse_action_markdown,
-)
-from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
 
 DEFAULT_DRIVER_CONFIG = EMERGE_ROOT / "dev/behavior_agent_eval.json"
 DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
@@ -219,6 +219,16 @@ def parse_args() -> argparse.Namespace:
         "--show-agent-events",
         action="store_true",
         help="Print Agent messages, tool calls, and action state changes while the run is active.",
+    )
+    parser.add_argument(
+        "--require-perception",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Require the configured SAM3 service and calibrated RGB-D geometry before "
+            "starting the expensive evaluator. Use --no-require-perception only for "
+            "an intentional π0.5-only fallback run."
+        ),
     )
     return parser.parse_args()
 
@@ -468,7 +478,20 @@ def _feedback_message(status: dict[str, Any], max_action_steps: int) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _validate_agent_provider(args: argparse.Namespace) -> str:
+def _agent_runtime_config(args: argparse.Namespace):
+    request = {
+        "message": "provider preflight",
+        "config": (
+            str(args.agent_config.expanduser().resolve())
+            if args.agent_config is not None
+            else None
+        ),
+        "model": args.agent_model,
+    }
+    return load_runtime_config(RunRequest.model_validate(request))
+
+
+def _validate_agent_provider(args: argparse.Namespace, config=None) -> str:
     """Fail before loading Isaac Sim when the Agent has no usable provider.
 
     This preflight runs in the runner's interpreter, so it is only conclusive
@@ -484,14 +507,7 @@ def _validate_agent_provider(args: argparse.Namespace) -> str:
             file=sys.stderr,
             flush=True,
         )
-    request = {
-        "message": "provider preflight",
-        "config": (
-            str(args.agent_config.expanduser().resolve()) if args.agent_config is not None else None
-        ),
-        "model": args.agent_model,
-    }
-    config = load_runtime_config(RunRequest.model_validate(request))
+    config = config or _agent_runtime_config(args)
     create_provider(config, model=args.agent_model)
     selected_model = str(args.agent_model or config.agents.defaults.model)
     if selected_model.startswith("openai-codex/"):
@@ -522,6 +538,27 @@ def _validate_agent_provider(args: argparse.Namespace) -> str:
                 f"Cached available models: {', '.join(sorted(available))}"
             )
     return selected_model
+
+
+def _validate_behavior_perception(config, *, required: bool) -> str:
+    """Ensure this RGB-D benchmark cannot silently fall back to the wrong geometry."""
+    perception = config.subagents.object_location
+    if perception.geometry_backend == "vggt":
+        raise ValueError(
+            "BEHAVIOR publishes calibrated RGB-D; set "
+            "subagents.objectLocation.geometryBackend to 'auto' or 'rgbd'"
+        )
+    sam3_url = str(perception.sam3_url)
+    if service_health_ok(sam3_url):
+        return sam3_url
+    message = (
+        f"SAM3 is not healthy at {sam3_url}. Start the local SAM3 service using "
+        "the command in scripts/Behavior_eval/README.md"
+    )
+    if required:
+        raise RuntimeError(message)
+    print(f"WARNING: {message}; continuing with the π0.5-only fallback.", flush=True)
+    return sam3_url
 
 
 def _start_agent(
@@ -731,8 +768,14 @@ def main() -> int:
     agent_python = require_executable(args.agent_python, "EMERGE Agent Python")
     args.agent_python = agent_python
     base_driver_config = _load_driver_config(args.driver_config)
-    agent_model = _validate_agent_provider(args)
+    runtime_config = _agent_runtime_config(args)
+    agent_model = _validate_agent_provider(args, runtime_config)
     print(f"EMERGE Agent provider ready for model: {agent_model}", flush=True)
+    sam3_url = _validate_behavior_perception(
+        runtime_config, required=args.require_perception
+    )
+    if args.require_perception:
+        print(f"EMERGE perception ready: RGB-D geometry + SAM3 at {sam3_url}", flush=True)
     robot_config = require_path(args.robot_config, "R1Pro OpenPI evaluation config")
 
     output_dir = assert_fresh_output_dir(args.output_dir)

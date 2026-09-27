@@ -9,9 +9,7 @@ descendants.
 from __future__ import annotations
 
 import json
-import os
 import socket
-import subprocess
 import sys
 import time
 import unittest
@@ -19,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from Emerge.utils.action_queue import append_action, update_action_document
 from robot.behavior import contracts
 from robot.behavior.observation import CAMERA_POSE_ORDER
 from scripts.Behavior_eval.checks import verify_artifacts
@@ -31,6 +30,7 @@ from scripts.Behavior_eval.eval_behavior_agent import (
     _prepare_workspace,
     _read_official_result,
     _resume_decision,
+    _validate_behavior_perception,
     _write_completed_evaluation_status,
     _write_running_evaluation_status,
     parse_args,
@@ -38,13 +38,12 @@ from scripts.Behavior_eval.eval_behavior_agent import (
 from scripts.Behavior_eval.runner_common import (
     assert_fresh_output_dir,
     assert_port_available,
-    install_workspace_skill,
     read_json,
+    service_health_ok,
     spawn_process,
     stop_process_group,
     wait_for_condition,
 )
-from Emerge.utils.action_queue import append_action, update_action_document
 
 
 def _pid_state(pid: int) -> str | None:
@@ -68,6 +67,7 @@ class RunnerCliTest(unittest.TestCase):
         self.assertEqual(args.max_steps, 6000)
         self.assertTrue(args.headless)
         self.assertFalse(args.show_agent_events)
+        self.assertTrue(args.require_perception)
         self.assertEqual(args.robot_config.name, "behavior_r1pro_openpi.yaml")
         self.assertEqual(args.gateway_port, DEFAULT_GATEWAY_PORT)
         self.assertEqual(args.upstream_port, DEFAULT_OPENPI_PORT)
@@ -96,6 +96,60 @@ class RunnerCliTest(unittest.TestCase):
         self.assertEqual(args.gateway_port, 9010)
         self.assertFalse(args.headless)
         self.assertTrue(args.show_agent_events)
+
+    def test_pi05_only_fallback_must_be_explicit(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            ["eval_behavior_agent.py", "--no-require-perception"],
+        ):
+            args = parse_args()
+        self.assertFalse(args.require_perception)
+
+
+class PerceptionPreflightTest(unittest.TestCase):
+    def test_behavior_requires_rgbd_geometry_mode(self) -> None:
+        from Emerge.config.schema import Config
+
+        config = Config()
+        config.subagents.object_location.geometry_backend = "vggt"
+        with self.assertRaisesRegex(ValueError, "calibrated RGB-D"):
+            _validate_behavior_perception(config, required=True)
+
+    def test_missing_sam3_fails_when_perception_is_required(self) -> None:
+        from Emerge.config.schema import Config
+
+        with patch(
+            "scripts.Behavior_eval.eval_behavior_agent.service_health_ok",
+            return_value=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "SAM3 is not healthy"):
+                _validate_behavior_perception(Config(), required=True)
+
+    def test_healthy_sam3_passes_and_explicit_fallback_is_allowed(self) -> None:
+        from Emerge.config.schema import Config
+
+        config = Config()
+        with patch(
+            "scripts.Behavior_eval.eval_behavior_agent.service_health_ok",
+            return_value=True,
+        ):
+            self.assertEqual(
+                _validate_behavior_perception(config, required=True),
+                "ws://localhost:8002",
+            )
+        with patch(
+            "scripts.Behavior_eval.eval_behavior_agent.service_health_ok",
+            return_value=False,
+        ):
+            self.assertEqual(
+                _validate_behavior_perception(config, required=False),
+                "ws://localhost:8002",
+            )
+
+    def test_service_health_rejects_invalid_urls(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid service URL"):
+            service_health_ok("not-a-url")
 
 
 class ProcessSupervisionTest(unittest.TestCase):

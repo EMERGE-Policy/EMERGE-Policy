@@ -101,6 +101,12 @@ Logs are written under `<output-dir>/logs/`. The durable episode summary is
 `<output-dir>/agent_episode_result.json`; official BEHAVIOR JSON and videos are
 written by the evaluator in the same output tree.
 
+The runner now requires the configured SAM3 `/healthz` endpoint before it
+starts OpenPI or Isaac Sim. This prevents an expensive run from silently
+dropping the measured-approach phase. Add `--no-require-perception` only when a
+π0.5-only fallback run is intentional. BEHAVIOR uses native calibrated RGB-D,
+so an Agent config that explicitly selects `geometryBackend: vggt` is rejected.
+
 ## Verify
 
 The offline suite exercises the driver, websocket gate, action queue,

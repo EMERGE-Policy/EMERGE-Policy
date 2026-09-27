@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 from urllib import request as urllib_request
+from urllib.parse import urlsplit, urlunsplit
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 EMERGE_ROOT = SCRIPT_DIR.parents[1]
@@ -193,6 +194,28 @@ def health_ok(port: int, *, host: str = "127.0.0.1") -> bool:
     opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
     try:
         with opener.open(f"http://{host}:{port}/healthz", timeout=2) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def service_health_ok(url: str, *, timeout_s: float = 2.0) -> bool:
+    """Probe the ``/healthz`` endpoint corresponding to an HTTP/WS service URL."""
+    parts = urlsplit(str(url))
+    if parts.scheme not in {"ws", "wss", "http", "https"} or not parts.netloc:
+        raise ValueError(f"invalid service URL: {url!r}")
+    health_url = urlunsplit(
+        (
+            "https" if parts.scheme in {"wss", "https"} else "http",
+            parts.netloc,
+            "/healthz",
+            "",
+            "",
+        )
+    )
+    opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
+    try:
+        with opener.open(health_url, timeout=float(timeout_s)) as response:
             return response.status == 200
     except Exception:
         return False
