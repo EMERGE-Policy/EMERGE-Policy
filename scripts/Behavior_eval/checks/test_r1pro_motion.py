@@ -90,6 +90,40 @@ class R1ProMotionPlanningTest(unittest.TestCase):
         final_pose = self.kinematics.forward("right", TRUNK, plan.actions[-1][15:22])
         self.assertLess(float(np.linalg.norm(final_pose[:3, 3] - target)), 0.01)
 
+    def test_move_linear_accepts_a_relative_displacement(self) -> None:
+        start = np.asarray(self.state["arms"]["right"]["eef_position"])
+        delta = np.asarray([0.01, 0.0, 0.0])
+
+        plan = plan_move_linear(
+            self.kinematics,
+            self.state,
+            self.hold,
+            side="right",
+            delta_m=delta.tolist(),
+            max_cartesian_step_m=0.005,
+        )
+
+        final_pose = self.kinematics.forward("right", TRUNK, plan.actions[-1][15:22])
+        self.assertLess(float(np.linalg.norm(final_pose[:3, 3] - (start + delta))), 0.01)
+
+    def test_move_linear_requires_exactly_one_target_form(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            plan_move_linear(
+                self.kinematics,
+                self.state,
+                self.hold,
+                side="right",
+            )
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            plan_move_linear(
+                self.kinematics,
+                self.state,
+                self.hold,
+                side="right",
+                position_m=[0.1, 0.2, 0.3],
+                delta_m=[0.0, 0.0, 0.1],
+            )
+
     def test_set_gripper_changes_only_the_selected_gripper(self) -> None:
         plan = plan_set_gripper(self.hold, side="left", command="close", steps=5)
         actions = np.asarray(plan.actions)

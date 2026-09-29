@@ -293,7 +293,7 @@ class BehaviorR1ProDriver(BaseDriver):
                     )
                 elif action_type == "move_linear":
                     unknown = sorted(
-                        set(params) - {"side", "position_m", "orientation_quat"}
+                        set(params) - {"side", "position_m", "delta_m", "orientation_quat"}
                     )
                     if unknown:
                         raise ValueError("move_linear received unknown parameters: " + ", ".join(unknown))
@@ -303,6 +303,7 @@ class BehaviorR1ProDriver(BaseDriver):
                         hold,
                         side=params.get("side"),
                         position_m=params.get("position_m"),
+                        delta_m=params.get("delta_m"),
                         orientation_quat=params.get("orientation_quat"),
                         max_steps=self._primitive_max_steps,
                     )

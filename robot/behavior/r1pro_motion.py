@@ -66,7 +66,8 @@ def plan_move_linear(
     hold_action: list[float],
     *,
     side: str,
-    position_m: list[float],
+    position_m: list[float] | None = None,
+    delta_m: list[float] | None = None,
     orientation_quat: list[float] | None = None,
     max_cartesian_step_m: float = 0.01,
     max_joint_step_rad: float = 0.03,
@@ -76,7 +77,13 @@ def plan_move_linear(
     _validate_model_state(kinematics, robot_state, side, current, trunk)
     target_orientation = _target_orientation(robot_state, side, orientation_quat)
     start_position = np.asarray(robot_state["arms"][side]["eef_position"], dtype=np.float64)
-    target_position = _vector(position_m, 3, "position_m")
+    if (position_m is None) == (delta_m is None):
+        raise ValueError("move_linear requires exactly one of position_m or delta_m")
+    target_position = (
+        _vector(position_m, 3, "position_m")
+        if position_m is not None
+        else start_position + _vector(delta_m, 3, "delta_m")
+    )
     distance = float(np.linalg.norm(target_position - start_position))
     waypoint_count = max(1, int(math.ceil(distance / float(max_cartesian_step_m))))
     actions: list[list[float]] = []

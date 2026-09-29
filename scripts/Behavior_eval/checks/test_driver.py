@@ -6,7 +6,9 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from scipy.spatial.transform import Rotation
 
@@ -308,6 +310,25 @@ class BehaviorDriverContractTest(unittest.TestCase):
         )
         self.assertTrue(result.startswith("Failed:"), result)
         self.assertIn("valid only with bbox", result)
+
+    def test_move_linear_forwards_relative_displacement_to_the_planner(self) -> None:
+        self.driver._kinematics = object()
+        planned = SimpleNamespace(
+            description="relative lift",
+            actions=((0.0,) * 23,),
+        )
+        with patch(
+            "robot.drivers.behavior_r1pro_driver.plan_move_linear",
+            return_value=planned,
+        ) as planner:
+            result = self.driver.execute_action(
+                "move_linear",
+                {"side": "right", "delta_m": [0.0, 0.0, 0.08]},
+            )
+
+        self.assertTrue(result.startswith("Linear execution finished:"), result)
+        self.assertEqual(planner.call_args.kwargs["delta_m"], [0.0, 0.0, 0.08])
+        self.assertIsNone(planner.call_args.kwargs["position_m"])
 
     def test_invalid_configuration_is_rejected_at_construction(self) -> None:
         with self.assertRaises(contracts.ConfigValidationError):
