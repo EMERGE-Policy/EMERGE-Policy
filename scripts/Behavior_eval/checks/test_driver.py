@@ -521,7 +521,39 @@ class BehaviorDriverResultTest(unittest.TestCase):
         self.assertEqual(robot["max_action_steps"], self.driver.max_action_steps)
         self.assertIn("state_synced", robot)
         self.assertIn("applied_steps", robot)
+        self.assertEqual(
+            robot["runtime_progress"],
+            {
+                "source": "emerge_gateway_diagnostic",
+                "gateway_action_steps": 0,
+                "execution_count": 0,
+                "official_steps_available": True,
+            },
+        )
         self.assertEqual(robot["evaluation"]["task"], contracts.TASK_NAME)
+
+    def test_runtime_progress_accumulates_gateway_steps_without_claiming_official_steps(self) -> None:
+        (self.workspace / "BEHAVIOR_STATUS.json").write_text(
+            json.dumps(_status_payload(steps=None)), encoding="utf-8"
+        )
+        self.gateway.execution = {
+            "execution_id": 1,
+            "status": "step_completed",
+            "completed_steps": 3,
+            "detail": "requested action budget exhausted",
+            "sync_observation_baseline": 0,
+            "baseline_evaluator_steps": None,
+        }
+
+        result = self.driver.execute_action("vla_execute", self._params(step=3))
+        progress = self.driver.get_runtime_state()["robots"]["behavior_r1pro"][
+            "runtime_progress"
+        ]
+
+        self.assertTrue(result.startswith("VLA execution finished:"), result)
+        self.assertEqual(progress["gateway_action_steps"], 3)
+        self.assertEqual(progress["execution_count"], 1)
+        self.assertFalse(progress["official_steps_available"])
 
     def test_runtime_state_reports_an_unusable_evaluation_without_crashing(self) -> None:
         (self.workspace / "BEHAVIOR_STATUS.json").write_text("{oops", encoding="utf-8")

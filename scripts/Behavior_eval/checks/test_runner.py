@@ -432,6 +432,8 @@ class OfficialResultBridgeTest(unittest.TestCase):
             status = _write_running_evaluation_status(status_path)
             self.assertEqual(status["source"], "emerge_supervisor")
             self.assertEqual(status["phase"], "running")
+            self.assertIsNone(status["steps"])
+            self.assertEqual(status["steps_source"], "unavailable_until_official_result")
             self.assertFalse(status["done"])
             self.assertEqual(read_json(status_path), status)
 

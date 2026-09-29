@@ -124,6 +124,8 @@ class BehaviorR1ProDriver(BaseDriver):
         self._last_sync_ok: bool | None = None
         self._last_applied_steps: int | None = None
         self._last_verdict: str | None = None
+        self._gateway_action_steps = 0
+        self._gateway_execution_count = 0
         self._gateway = B1KProxyGateway(
             upstream_url=config["upstream_url"],
             listen_host=config["listen_host"],
@@ -333,6 +335,8 @@ class BehaviorR1ProDriver(BaseDriver):
             return f"{contracts.FAILED_PREFIX} {exc}"
 
         completed = int(result.get("completed_steps") or 0)
+        self._gateway_action_steps += completed
+        self._gateway_execution_count += 1
         status = str(result.get("status") or ERROR)
         detail = str(result.get("detail") or "")
 
@@ -404,6 +408,15 @@ class BehaviorR1ProDriver(BaseDriver):
                     "state_synced": self._last_sync_ok,
                     "applied_steps": self._last_applied_steps,
                     "last_verdict": self._last_verdict,
+                    "runtime_progress": {
+                        "source": "emerge_gateway_diagnostic",
+                        "gateway_action_steps": self._gateway_action_steps,
+                        "execution_count": self._gateway_execution_count,
+                        "official_steps_available": _int_or_none(
+                            (evaluation or {}).get("steps")
+                        )
+                        is not None,
+                    },
                     "execution_timeout_s": self._execution_timeout_s,
                     "progress_timeout_s": self._progress_timeout_s,
                     "state_sync_timeout_s": self._state_sync_timeout_s,

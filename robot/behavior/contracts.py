@@ -323,6 +323,13 @@ def validate_evaluation(
         value = payload.get(key)
         if value is not None and not isinstance(value, bool):
             raise EvaluationValidationError(f"evaluator field {key} must be a boolean")
+    steps = payload.get("steps")
+    if steps is not None and (
+        isinstance(steps, bool) or not isinstance(steps, int) or steps < 0
+    ):
+        raise EvaluationValidationError(
+            "evaluator field steps must be a non-negative integer or null"
+        )
     return payload
 
 

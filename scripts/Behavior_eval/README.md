@@ -146,7 +146,10 @@ calibrated `object_location`, native R1Pro `move_to_pose` / `move_linear` /
 `set_gripper` actions, and `task_verification`. The official result remains authoritative:
 `step_completed` only means that a requested action budget was consumed. During
 the rollout, EMERGE maintains the live episode state from its controlled
-websocket gateway. At completion it reads the result JSON written by the stock
+websocket gateway. During a run, `evaluation.steps` is null because the stock
+evaluator does not publish its official counter until completion;
+`runtime_progress.gateway_action_steps` is a clearly labelled gateway-side
+diagnostic. At completion the runner reads the result JSON written by the stock
 BEHAVIOR evaluator; that official JSON remains the source of success and score.
 
 Logs are written under `<output-dir>/logs/`. The durable episode summary is

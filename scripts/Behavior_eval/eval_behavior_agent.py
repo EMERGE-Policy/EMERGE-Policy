@@ -99,6 +99,10 @@ You control one R1Pro episode for `turning_on_radio` through the
   `robots.behavior_r1pro.evaluation.phase == "completed"`.
 - A `step_completed` action result only means the requested action budget was
   consumed. It does not mean the task succeeded.
+- While the episode is running, `evaluation.steps` is null because stock
+  BEHAVIOR publishes its official counter only at completion. Use
+  `runtime_progress.gateway_action_steps` for live diagnosis; it is not an
+  official score.
 - `robots.behavior_r1pro.state_synced` tells you whether the simulator has been
   confirmed to apply your last action. Do not judge progress while it is false.
 - `robots.behavior_r1pro.evaluation.phase == "error"` is an evaluator failure,
@@ -328,7 +332,8 @@ def _write_running_evaluation_status(status_path: Path) -> dict[str, Any]:
         "task": TASK_NAME,
         "rollout_id": 0,
         "phase": "running",
-        "steps": 0,
+        "steps": None,
+        "steps_source": "unavailable_until_official_result",
         "success": False,
         "done": False,
     }
