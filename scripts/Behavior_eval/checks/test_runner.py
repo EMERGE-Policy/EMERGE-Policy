@@ -539,52 +539,54 @@ class EpisodeVerdictTest(unittest.TestCase):
             contracts.classify_episode(status, evaluator_returncode=1), "infrastructure_error"
         )
 
-    def test_only_benign_finish_reasons_are_resumable(self) -> None:
-        self.assertTrue(contracts.is_resumable_finish_reason("max_iterations"))
-        self.assertTrue(contracts.is_resumable_finish_reason("length"))
-        for reason in (
-            "error",
-            "timeout",
-            "cancel_requested",
-            "cancellation_unconfirmed",
-            "unfinished_action",
-            "cleanup_error",
-            "runtime_error",
-            "invalid_result",
-            "",
-            None,
-        ):
-            with self.subTest(reason=reason):
-                self.assertFalse(contracts.is_resumable_finish_reason(reason))
-
-
 class ResumeDecisionTest(unittest.TestCase):
-    def _decide(self, reason: str, *, rounds: int = 0, maximum: int = 2, settled: bool = True) -> str:
+    def _decide(
+        self,
+        reason: str,
+        *,
+        returncode: int = 0,
+        status: dict | None = None,
+        rounds: int = 0,
+        maximum: int = 2,
+        settled: bool = True,
+    ) -> str:
         return _resume_decision(
+            returncode=returncode,
             finish_reason=reason,
+            status=status or {"success": False, "done": False},
             feedback_rounds=rounds,
             max_rounds=maximum,
             actions_settled=settled,
         )
 
-    def test_max_iterations_resumes_the_same_session(self) -> None:
-        self.assertEqual(self._decide("max_iterations"), "resume")
+    def test_clean_agent_stop_resumes_the_same_session(self) -> None:
+        self.assertEqual(self._decide("stop"), "resume")
+
+    def test_failed_iteration_or_context_limit_does_not_resume(self) -> None:
+        self.assertEqual(self._decide("max_iterations", returncode=1), "stop")
+        self.assertEqual(self._decide("length", returncode=1), "stop")
 
     def test_unconfirmed_cancellation_never_resumes(self) -> None:
         self.assertEqual(self._decide("cancellation_unconfirmed"), "infrastructure")
         self.assertEqual(self._decide("unfinished_action"), "infrastructure")
 
-    def test_provider_error_stops_without_being_infrastructure(self) -> None:
-        self.assertEqual(self._decide("error"), "stop")
+    def test_provider_error_is_infrastructure(self) -> None:
+        self.assertEqual(self._decide("error", returncode=1), "infrastructure")
 
     def test_timeout_stops_because_the_budget_is_already_spent(self) -> None:
-        self.assertEqual(self._decide("timeout"), "stop")
+        self.assertEqual(self._decide("timeout", returncode=124), "stop")
 
     def test_round_limit_is_reported_separately(self) -> None:
-        self.assertEqual(self._decide("max_iterations", rounds=2, maximum=2), "exhausted")
+        self.assertEqual(self._decide("stop", rounds=2, maximum=2), "exhausted")
 
     def test_an_unsettled_action_blocks_the_resume(self) -> None:
-        self.assertEqual(self._decide("max_iterations", settled=False), "blocked")
+        self.assertEqual(self._decide("stop", settled=False), "blocked")
+
+    def test_finished_official_episode_does_not_resume(self) -> None:
+        self.assertEqual(
+            self._decide("stop", status={"success": True, "done": True}),
+            "stop",
+        )
 
     def test_actions_settled_reads_the_real_queue(self) -> None:
         with TemporaryDirectory() as temporary:

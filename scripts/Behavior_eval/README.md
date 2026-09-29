@@ -128,6 +128,12 @@ The Agent uses EMERGE's native `~/.Emerge/config.json` provider configuration.
 Pass `--config /path/to/config.json` only when an episode needs a different
 configuration.
 
+Feedback continuation follows the native LIBERO runner: the same session is
+continued only after a clean Agent response while the official evaluator still
+reports an unfinished episode. Runtime failures such as `max_iterations`,
+context `length`, provider errors, or timeouts are not converted into a fresh
+Agent run.
+
 `--config` has the same meaning as the native `Emerge agent --config` option;
 `--agent-config` remains an alias for older evaluation commands. The base
 driver config is copied into the output directory as `driver_config.json`, with

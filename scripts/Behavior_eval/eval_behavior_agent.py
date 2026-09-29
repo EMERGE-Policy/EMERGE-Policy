@@ -40,7 +40,6 @@ from robot.behavior.contracts import (  # noqa: E402
     agent_exit_code,
     classify_episode,
     episode_terminated,
-    is_resumable_finish_reason,
     validate_driver_config,
 )
 from scripts.Behavior_eval.runner_common import (  # noqa: E402
@@ -71,6 +70,7 @@ BEHAVIOR_RGBD_WRAPPER = "omnigibson.eval.wrappers.RGBDFullResWrapper"
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
     {
         "cancellation_unconfirmed",
+        "error",
         "unfinished_action",
         "cleanup_error",
         "runtime_error",
@@ -168,8 +168,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help=(
-            "How many times a session may be resumed after the Agent stopped early "
-            "for a benign reason (max_iterations / context length)."
+            "How many times a cleanly completed Agent response may receive official "
+            "evaluator feedback while the episode is still running."
         ),
     )
     parser.add_argument(
@@ -740,7 +740,9 @@ def _actions_settled(workspace: Path) -> bool:
 
 def _resume_decision(
     *,
+    returncode: int,
     finish_reason: str,
+    status: dict[str, Any],
     feedback_rounds: int,
     max_rounds: int,
     actions_settled: bool,
@@ -748,12 +750,13 @@ def _resume_decision(
     """Decide what to do after the Agent process exits.
 
     Returns ``infrastructure``, ``stop``, ``exhausted``, ``blocked`` or
-    ``resume``.  Resuming is only safe once the previous run's cancellation was
-    confirmed and no action is still in flight.
+    ``resume``. Like the native LIBERO runner, feedback is allowed only after a
+    clean Agent exit while the evaluator remains unfinished. Resuming is safe
+    only when no action is still in flight.
     """
     if finish_reason in INFRASTRUCTURE_FINISH_REASONS:
         return "infrastructure"
-    if not is_resumable_finish_reason(finish_reason):
+    if returncode != 0 or status.get("success") or status.get("done"):
         return "stop"
     if feedback_rounds >= max_rounds:
         return "exhausted"
@@ -939,7 +942,9 @@ def main() -> int:
                     finish_reason = str(agent_results[-1].get("finish_reason") or "agent_exit")
                     termination_reason = f"agent_{finish_reason}"
                     decision = _resume_decision(
+                        returncode=int(agent.returncode),
                         finish_reason=finish_reason,
+                        status=status,
                         feedback_rounds=feedback_rounds,
                         max_rounds=args.max_agent_feedback_rounds,
                         actions_settled=_actions_settled(workspace),

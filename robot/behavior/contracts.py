@@ -376,44 +376,6 @@ def classify_episode(
     return "task_failed"
 
 
-# --------------------------------------------------------------------------- #
-# Agent run contract
-# --------------------------------------------------------------------------- #
-
-#: Agent finish reasons that mean "the run stopped early but the episode is
-#: still healthy", so the same session can be resumed with a new run id.
-RESUMABLE_FINISH_REASONS = frozenset({"max_iterations", "length"})
-
-#: Finish reasons that must never be retried automatically because retrying
-#: cannot help or would restart work that is not known to have stopped.
-NON_RESUMABLE_FINISH_REASONS = frozenset(
-    {
-        "error",
-        "content_filter",
-        "cancellation_unconfirmed",
-        "unfinished_action",
-        "cleanup_error",
-        "runtime_error",
-        "invalid_request",
-        "invalid_result",
-        "cancel_requested",
-        "timeout",
-    }
-)
-
-
-def is_resumable_finish_reason(reason: Any) -> bool:
-    """True only when the runtime reported a benign early stop.
-
-    ``timeout`` is deliberately excluded: the run already consumed its wall
-    clock budget, so starting another run would silently double it.
-    """
-    text = str(reason or "").strip()
-    if not text or text in NON_RESUMABLE_FINISH_REASONS:
-        return False
-    return text in RESUMABLE_FINISH_REASONS
-
-
 def agent_exit_code(
     *,
     verdict: str,
