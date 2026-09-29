@@ -32,7 +32,10 @@ class LocateCandidatesTool(Tool):
             "semantic object. For every camera view, select the # instance whose "
             "mask covers that same physical object; ranks can change by view. "
             "This tool reuses cached calibrated geometry and SAM3 masks; it "
-            "does not run either model again."
+            "does not run either model again. A single reviewed view is "
+            "geometrically sufficient only for calibrated native RGB-D; "
+            "reconstructed RGB geometry keeps its configured multi-view "
+            "consensus requirement."
         )
 
     @property
@@ -70,7 +73,10 @@ class LocateCandidatesTool(Tool):
                                     "Camera views and per-view instance ranks whose "
                                     "reviewed masks cover this exact physical object. "
                                     "Do not assume #1 or #2 has the same identity "
-                                    "across different views."
+                                    "across different views. One view may be supplied "
+                                    "for an unambiguous calibrated RGB-D target; use "
+                                    "multiple views whenever identity or a requested "
+                                    "relation needs cross-view confirmation."
                                 ),
                                 "items": {
                                     "type": "object",
@@ -87,7 +93,7 @@ class LocateCandidatesTool(Tool):
                                     },
                                     "required": ["view_name", "instance_index"],
                                 },
-                                "minItems": 2,
+                                "minItems": 1,
                             },
                         },
                         "required": [

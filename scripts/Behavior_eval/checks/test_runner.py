@@ -9,7 +9,9 @@ descendants.
 from __future__ import annotations
 
 import json
+import re
 import socket
+import subprocess
 import sys
 import time
 import unittest
@@ -31,6 +33,7 @@ from scripts.Behavior_eval.eval_behavior_agent import (
     _read_official_result,
     _resume_decision,
     _validate_behavior_perception,
+    _validate_external_openpi,
     _write_completed_evaluation_status,
     _write_running_evaluation_status,
     parse_args,
@@ -64,16 +67,24 @@ class RunnerCliTest(unittest.TestCase):
     def test_defaults_use_the_shorter_budget_and_headless_mode(self) -> None:
         with patch.object(sys, "argv", ["eval_behavior_agent.py"]):
             args = parse_args()
-        self.assertEqual(args.max_steps, 6000)
+        self.assertEqual(args.max_steps, 3224)
+        self.assertIsNone(args.agent_max_iterations)
         self.assertTrue(args.headless)
         self.assertFalse(args.show_agent_events)
-        self.assertTrue(args.require_perception)
         self.assertFalse(args.preflight_only)
         self.assertEqual(args.robot_config.name, "behavior_r1pro_openpi.yaml")
         self.assertEqual(args.gateway_port, DEFAULT_GATEWAY_PORT)
         self.assertEqual(args.upstream_port, DEFAULT_OPENPI_PORT)
         self.assertEqual(args.gateway_port, 8000)
         self.assertEqual(args.upstream_port, 8011)
+        self.assertEqual(
+            args.output_dir.parent,
+            Path(__file__).resolve().parents[4] / "emerge_pi05_eval",
+        )
+        self.assertRegex(
+            args.output_dir.name,
+            re.compile(r"^turning_on_radio_agent_\d{8}_\d{6}$"),
+        )
 
     def test_native_config_name_and_live_options_are_accepted(self) -> None:
         with patch.object(
@@ -87,6 +98,8 @@ class RunnerCliTest(unittest.TestCase):
                 "9011",
                 "--gateway-port",
                 "9010",
+                "--agent-max-iterations",
+                "80",
                 "--no-headless",
                 "--show-agent-events",
             ],
@@ -95,17 +108,9 @@ class RunnerCliTest(unittest.TestCase):
         self.assertEqual(args.agent_config, Path("/tmp/provider.json"))
         self.assertEqual(args.upstream_port, 9011)
         self.assertEqual(args.gateway_port, 9010)
+        self.assertEqual(args.agent_max_iterations, 80)
         self.assertFalse(args.headless)
         self.assertTrue(args.show_agent_events)
-
-    def test_pi05_only_fallback_must_be_explicit(self) -> None:
-        with patch.object(
-            sys,
-            "argv",
-            ["eval_behavior_agent.py", "--no-require-perception"],
-        ):
-            args = parse_args()
-        self.assertFalse(args.require_perception)
 
     def test_preflight_only_is_an_explicit_mode(self) -> None:
         with patch.object(
@@ -124,7 +129,7 @@ class PerceptionPreflightTest(unittest.TestCase):
         config = Config()
         config.subagents.object_location.geometry_backend = "vggt"
         with self.assertRaisesRegex(ValueError, "calibrated RGB-D"):
-            _validate_behavior_perception(config, required=True)
+            _validate_behavior_perception(config)
 
     def test_missing_sam3_fails_when_perception_is_required(self) -> None:
         from Emerge.config.schema import Config
@@ -134,9 +139,9 @@ class PerceptionPreflightTest(unittest.TestCase):
             return_value=False,
         ):
             with self.assertRaisesRegex(RuntimeError, "SAM3 is not healthy"):
-                _validate_behavior_perception(Config(), required=True)
+                _validate_behavior_perception(Config())
 
-    def test_healthy_sam3_passes_and_explicit_fallback_is_allowed(self) -> None:
+    def test_healthy_sam3_passes(self) -> None:
         from Emerge.config.schema import Config
 
         config = Config()
@@ -145,21 +150,26 @@ class PerceptionPreflightTest(unittest.TestCase):
             return_value=True,
         ):
             self.assertEqual(
-                _validate_behavior_perception(config, required=True),
-                "ws://localhost:8002",
-            )
-        with patch(
-            "scripts.Behavior_eval.eval_behavior_agent.service_health_ok",
-            return_value=False,
-        ):
-            self.assertEqual(
-                _validate_behavior_perception(config, required=False),
+                _validate_behavior_perception(config),
                 "ws://localhost:8002",
             )
 
     def test_service_health_rejects_invalid_urls(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid service URL"):
             service_health_ok("not-a-url")
+
+    def test_external_openpi_must_already_be_healthy(self) -> None:
+        with patch(
+            "scripts.Behavior_eval.eval_behavior_agent.service_health_ok",
+            return_value=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "OpenPI is not healthy"):
+                _validate_external_openpi(8011)
+        with patch(
+            "scripts.Behavior_eval.eval_behavior_agent.service_health_ok",
+            return_value=True,
+        ):
+            self.assertEqual(_validate_external_openpi(8011), "ws://127.0.0.1:8011")
 
 
 class ProcessSupervisionTest(unittest.TestCase):
@@ -311,6 +321,16 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             len({DEFAULT_GATEWAY_PORT, 8001, 8002, DEFAULT_OPENPI_PORT}),
             4,
         )
+
+    def test_behavior_service_launcher_uses_the_shared_model_server_entrypoint(self) -> None:
+        launcher = Path(__file__).resolve().parents[1] / "start_behavior_services.sh"
+        result = subprocess.run(
+            ["bash", "-n", str(launcher)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_checked_in_camera_intrinsics_match_official_rgbd_wrapper(self) -> None:
         config_path = Path(__file__).resolve().parents[3] / "dev/behavior_agent_eval.json"

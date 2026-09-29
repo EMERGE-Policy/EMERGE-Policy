@@ -47,8 +47,10 @@ When the radio is clearly visible and plausibly within reach, call:
 ```
 
 Require `status: success`, `found: true`, and `frame: robot_base` before using
-any returned coordinate. A radio bounding-box center is not automatically a
-button coordinate.
+any returned coordinate. A single head RGB-D view may provide the radio's coarse
+visible-surface box when its identity is visually unambiguous. The power control
+still requires independent confirmation in at least two views. A radio
+bounding-box center is not automatically a button coordinate.
 
 ### 3. Measured pre-contact approach
 

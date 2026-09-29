@@ -119,13 +119,7 @@ You control one R1Pro episode for `turning_on_radio` through the
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--openpi-root", type=Path, default=WORKSPACE_ROOT / "openpi")
     parser.add_argument("--behavior-root", type=Path, default=WORKSPACE_ROOT / "BEHAVIOR-1K")
-    parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        default=WORKSPACE_ROOT / "checkpoints/pi05TurningOnRadio/pi05_turn_on_the_radio",
-    )
     parser.add_argument(
         "--agent-python",
         type=Path,
@@ -155,7 +149,15 @@ def parse_args() -> argparse.Namespace:
             "checkpoint observation keys."
         ),
     )
-    parser.add_argument("--agent-max-iterations", type=int, default=20)
+    parser.add_argument(
+        "--agent-max-iterations",
+        type=int,
+        default=None,
+        help=(
+            "Override EMERGE's configured maximum tool iterations for each Agent run. "
+            "By default the native EMERGE configuration is used."
+        ),
+    )
     parser.add_argument(
         "--max-agent-feedback-rounds",
         type=int,
@@ -169,13 +171,20 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=default_output_dir("turning_on_radio_agent"),
+        help=(
+            "Episode artifact directory. When omitted, create a new timestamped "
+            f"directory under {WORKSPACE_ROOT / 'emerge_pi05_eval'}."
+        ),
     )
     parser.add_argument("--instance-index", type=int, default=0)
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=6_000,
-        help="Maximum BEHAVIOR simulator steps for the episode. Default: 6000.",
+        default=3_224,
+        help=(
+            "Maximum BEHAVIOR simulator steps for the episode. Default: 3224, "
+            "the official turning_on_radio limit in BEHAVIOR v3.9.3."
+        ),
     )
     parser.add_argument(
         "--upstream-port",
@@ -221,20 +230,10 @@ def parse_args() -> argparse.Namespace:
         help="Print Agent messages, tool calls, and action state changes while the run is active.",
     )
     parser.add_argument(
-        "--require-perception",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Require the configured SAM3 service and calibrated RGB-D geometry before "
-            "starting the expensive evaluator. Use --no-require-perception only for "
-            "an intentional π0.5-only fallback run."
-        ),
-    )
-    parser.add_argument(
         "--preflight-only",
         action="store_true",
         help=(
-            "Validate environments, checkpoint, provider, perception service, ports, "
+            "Validate environments, provider, external model services, ports, "
             "and configs, then exit without creating an episode or calling the LLM."
         ),
     )
@@ -548,7 +547,7 @@ def _validate_agent_provider(args: argparse.Namespace, config=None) -> str:
     return selected_model
 
 
-def _validate_behavior_perception(config, *, required: bool) -> str:
+def _validate_behavior_perception(config) -> str:
     """Ensure this RGB-D benchmark cannot silently fall back to the wrong geometry."""
     perception = config.subagents.object_location
     if perception.geometry_backend == "vggt":
@@ -563,10 +562,17 @@ def _validate_behavior_perception(config, *, required: bool) -> str:
         f"SAM3 is not healthy at {sam3_url}. Start the local SAM3 service using "
         "the command in scripts/Behavior_eval/README.md"
     )
-    if required:
-        raise RuntimeError(message)
-    print(f"WARNING: {message}; continuing with the π0.5-only fallback.", flush=True)
-    return sam3_url
+    raise RuntimeError(message)
+
+
+def _validate_external_openpi(port: int) -> str:
+    url = f"ws://127.0.0.1:{int(port)}"
+    if not service_health_ok(url):
+        raise RuntimeError(
+            f"OpenPI is not healthy at {url}. Start the BEHAVIOR external model "
+            "services using scripts/Behavior_eval/start_behavior_services.sh"
+        )
+    return url
 
 
 def _start_agent(
@@ -589,8 +595,9 @@ def _start_agent(
         "workspace": str(workspace),
         "restrict_to_workspace": True,
         "stream": False,
-        "max_iterations": args.agent_max_iterations,
     }
+    if args.agent_max_iterations is not None:
+        request["max_iterations"] = args.agent_max_iterations
     if args.agent_config is not None:
         request["config"] = str(args.agent_config.expanduser().resolve())
     if args.agent_model:
@@ -759,17 +766,14 @@ def main() -> int:
     args = parse_args()
     if args.max_steps < 1:
         raise ValueError("--max-steps must be positive")
-    if args.agent_max_iterations < 1:
+    if args.agent_max_iterations is not None and args.agent_max_iterations < 1:
         raise ValueError("--agent-max-iterations must be positive")
     if args.max_agent_feedback_rounds < 0:
         raise ValueError("--max-agent-feedback-rounds must not be negative")
     if args.upstream_port == args.gateway_port:
         raise ValueError("--upstream-port and --gateway-port must be different")
 
-    openpi_root = require_path(args.openpi_root, "OpenPI root")
     behavior_root = require_path(args.behavior_root, "BEHAVIOR root")
-    checkpoint = require_path(args.checkpoint, "π0.5 checkpoint")
-    openpi_python = require_executable(openpi_root / ".venv/bin/python", "OpenPI Python")
     behavior_python = require_executable(
         WORKSPACE_ROOT / "envs/behavior/bin/python", "BEHAVIOR Python"
     )
@@ -779,21 +783,18 @@ def main() -> int:
     runtime_config = _agent_runtime_config(args)
     agent_model = _validate_agent_provider(args, runtime_config)
     print(f"EMERGE Agent provider ready for model: {agent_model}", flush=True)
-    sam3_url = _validate_behavior_perception(
-        runtime_config, required=args.require_perception
-    )
-    if args.require_perception:
-        print(f"EMERGE perception ready: RGB-D geometry + SAM3 at {sam3_url}", flush=True)
+    sam3_url = _validate_behavior_perception(runtime_config)
+    print(f"EMERGE perception ready: RGB-D geometry + SAM3 at {sam3_url}", flush=True)
+    openpi_url = _validate_external_openpi(args.upstream_port)
+    print(f"OpenPI service ready: {openpi_url}", flush=True)
     robot_config = require_path(args.robot_config, "R1Pro OpenPI evaluation config")
 
-    assert_port_available(args.upstream_port, label="OpenPI server")
     assert_port_available(args.gateway_port, label="EMERGE gateway")
     if args.preflight_only:
         print(
             "BEHAVIOR preflight passed: "
-            f"OpenPI={openpi_root}, BEHAVIOR={behavior_root}, "
-            f"checkpoint={checkpoint}, robot_config={robot_config}, "
-            f"ports={args.gateway_port}/{args.upstream_port}.",
+            f"OpenPI={openpi_url}, SAM3={sam3_url}, BEHAVIOR={behavior_root}, "
+            f"robot_config={robot_config}, gateway_port={args.gateway_port}.",
             flush=True,
         )
         return 0
@@ -834,37 +835,10 @@ def main() -> int:
 
     try:
         with (
-            (logs_dir / "openpi.log").open("wb") as openpi_log,
             (logs_dir / "controller.log").open("wb") as controller_log,
             (logs_dir / "evaluator.log").open("wb") as evaluator_log,
             (logs_dir / "agent.log").open("ab") as agent_log,
         ):
-            openpi = spawn_process(
-                [
-                    str(openpi_python),
-                    "scripts/b1k/serve_b1k.py",
-                    "--robot",
-                    "b1k/R1Pro",
-                    "--task",
-                    "b1k/turning_on_radio",
-                    "--repo-id",
-                    "turning_on_radio",
-                    "--policy.config",
-                    "pi05_b1k",
-                    "--policy.dir",
-                    str(checkpoint),
-                    "--port",
-                    str(args.upstream_port),
-                ],
-                cwd=openpi_root,
-                log=openpi_log,
-            )
-            processes.append(openpi)
-            print(f"Starting OpenPI; log: {logs_dir / 'openpi.log'}", flush=True)
-            wait_for_health(
-                args.upstream_port, openpi, args.startup_timeout, label="OpenPI server"
-            )
-
             controller = spawn_process(
                 [
                     str(agent_python),

@@ -41,9 +41,11 @@ Always use this candidate-verification workflow:
    returned full-view overlay one view at a time. For each candidate, record the
    exact per-view instance whose mask covers that same physical object. Exclude
    a view whenever the mask jumps to a distractor, even if its confidence is
-   high. For a relational target, at least two verified views must support the
-   requested relation to the same reference object; never substitute an
-   identical-looking instance that violates the relation.
+   high. One unambiguous calibrated RGB-D view can measure coarse visible-surface
+   geometry. For a relational target whose identity remains ambiguous, at least
+   two verified views must support the requested relation to the same reference
+   object; never substitute an identical-looking instance that violates the
+   relation.
 6. Only after reviewing the overlays, decide which candidate represents each
    requested semantic target. Use the original images together with the labeled
    overlays and explicitly verify every identity-defining spatial relation.
@@ -56,11 +58,12 @@ Always use this candidate-verification workflow:
    pixels and never call it when appearance or a requested relation is
    unconfirmed.
 
-Hard stop: when a segmentation result contains a candidate confirmed in at
-least two views by both appearance and every requested spatial relation, the
-next tool call must localize that candidate. A mask in two views is not enough
-when the instance relation is unresolved. Repeat segmentation only when no
-candidate has two relation-consistent detections.
+Hard stop: when calibrated RGB-D contains an unambiguous candidate confirmed by
+appearance in one reviewed view, or when a relation-dependent candidate is
+confirmed across the views needed to resolve that relation, the next tool call
+must localize that candidate. A mask in multiple views is not enough when the
+instance relation is unresolved. Repeat segmentation only when the available
+masks do not establish the requested identity.
 
 Choose the best-supported candidate when appearance and requested relation give
 it a meaningful advantage, even if small text is unreadable. Report ambiguity

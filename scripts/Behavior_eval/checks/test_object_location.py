@@ -18,6 +18,9 @@ from Emerge.subagents.object_location.tools.location.engine import (
     LocationEngine,
 )
 from Emerge.subagents.object_location.tools.observation import ObservationStore
+from Emerge.subagents.object_location.tools.segment_candidates import (
+    SegmentCandidatesTool,
+)
 from robot.behavior.observation import ObservationPublisher
 
 
@@ -301,6 +304,173 @@ class BehaviorObjectLocationCompatibilityTest(unittest.TestCase):
             self.assertEqual(
                 result["objects"][0]["position_type"],
                 "visible_surface_bbox_center",
+            )
+
+    def test_rgbd_engine_localizes_one_verified_head_view(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            store = ObservationStore(workspace)
+            store.load()
+            engine = LocationEngine(
+                store,
+                vggt_url="ws://unused:8001",
+                sam3_url="ws://unused:8002",
+                timeout=1.0,
+                point_conf_threshold=0.3,
+                min_points=10,
+                bbox_padding_pixels=0,
+                view_center_tolerance_m=0.08,
+                ray_consensus_tolerance_m=0.02,
+                min_consistent_views=2,
+            )
+            mask = np.zeros((224, 224), dtype=bool)
+            mask[100:110, 100:110] = True
+            engine._sam3 = _RecordingClient(
+                {
+                    "views": [
+                        {
+                            "view_name": name,
+                            "image_shape": [224, 224],
+                            "targets": [
+                                {
+                                    "object_key": "radio_1",
+                                    "prompt": "red radio",
+                                    "found": name == "head",
+                                    "confidence": 0.9 if name == "head" else 0.0,
+                                    "instance_index": 1,
+                                    "mask": mask if name == "head" else None,
+                                    "bbox_2d": [100, 100, 109, 109]
+                                    if name == "head"
+                                    else None,
+                                    "area_pixels": int(mask.sum())
+                                    if name == "head"
+                                    else 0,
+                                }
+                            ],
+                        }
+                        for name in ("head", "left_wrist", "right_wrist")
+                    ]
+                }
+            )
+
+            asyncio.run(
+                engine.segment_candidates(
+                    [
+                        {
+                            "candidate_id": "radio_1",
+                            "target_key": "radio",
+                            "prompt": "red radio",
+                        }
+                    ]
+                )
+            )
+            result = engine.locate_candidates(
+                [
+                    {
+                        "object_key": "radio",
+                        "candidate_id": "radio_1",
+                        "verified_instances": [
+                            {"view_name": "head", "instance_index": 1}
+                        ],
+                    }
+                ]
+            )["objects"][0]
+
+            self.assertTrue(result["found"])
+            self.assertEqual(result["frame"], "robot_base")
+            self.assertEqual(result["verified_views"], ["head"])
+            self.assertEqual(
+                result["geometry_evidence"],
+                "single_view_calibrated_rgbd",
+            )
+
+            engine._active_geometry_backend = "vggt"
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires at least 2 distinct verified views",
+            ):
+                engine.locate_candidates(
+                    [
+                        {
+                            "object_key": "radio",
+                            "candidate_id": "radio_1",
+                            "verified_instances": [
+                                {"view_name": "head", "instance_index": 1}
+                            ],
+                        }
+                    ]
+                )
+
+    def test_rgbd_candidate_tool_renders_overlays_from_observation_rgb(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _publish_behavior_observation(workspace)
+            store = ObservationStore(workspace)
+            store.load()
+            engine = LocationEngine(
+                store,
+                vggt_url="ws://unused:8001",
+                sam3_url="ws://unused:8002",
+                timeout=1.0,
+                point_conf_threshold=0.3,
+                min_points=10,
+                bbox_padding_pixels=0,
+                view_center_tolerance_m=0.08,
+                ray_consensus_tolerance_m=0.02,
+                min_consistent_views=2,
+            )
+            mask = np.zeros((224, 224), dtype=bool)
+            mask[100:110, 100:110] = True
+            engine._sam3 = _RecordingClient(
+                {
+                    "views": [
+                        {
+                            "view_name": name,
+                            "image_shape": [224, 224],
+                            "targets": [
+                                {
+                                    "object_key": "radio_1",
+                                    "prompt": "red radio",
+                                    "found": name == "head",
+                                    "confidence": 0.9 if name == "head" else 0.0,
+                                    "instance_index": 1,
+                                    "mask": mask if name == "head" else None,
+                                    "bbox_2d": [100, 100, 109, 109]
+                                    if name == "head"
+                                    else None,
+                                    "area_pixels": int(mask.sum())
+                                    if name == "head"
+                                    else 0,
+                                }
+                            ],
+                        }
+                        for name in ("head", "left_wrist", "right_wrist")
+                    ]
+                }
+            )
+            tool = SegmentCandidatesTool(engine)
+
+            result = asyncio.run(
+                tool.execute(
+                    [
+                        {
+                            "candidate_id": "radio_1",
+                            "target_key": "radio",
+                            "prompt": "red radio",
+                        }
+                    ]
+                )
+            )
+
+            self.assertIsNone(tool.last_error)
+            self.assertEqual(
+                [item.text for item in result.content if hasattr(item, "text")],
+                [
+                    "Candidate mask overlay: head",
+                    "Candidate mask overlay: left_wrist",
+                    "Candidate mask overlay: right_wrist",
+                ],
             )
 
     def test_location_result_uses_the_manifest_coordinate_frame(self) -> None:

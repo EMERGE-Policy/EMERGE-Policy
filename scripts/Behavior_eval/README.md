@@ -31,8 +31,9 @@ One episode intentionally spans separate Python environments:
 
 | Process | Environment | Role |
 |---|---|---|
+| OpenPI server | `/data/yxy/openpi/.venv` | External π0.5 inference service |
+| SAM3 server | `EmergePolicy` | External prompt-guided segmentation service |
 | Runner, Agent, Controller | `phyagentos` | EMERGE reasoning, action queue, and native driver |
-| OpenPI server | `/data/yxy/openpi/.venv` | π0.5 inference |
 | BEHAVIOR evaluator | `/data/yxy/envs/behavior` | Isaac Sim, episode lifecycle, and official scoring |
 
 The evaluator only calls `env.step` while the driver grants an action budget.
@@ -54,9 +55,39 @@ configuration, do not assign OpenPI to 8001 or 8002.
 
 ## Run one instance
 
-Keep the SAM3 command below running in one terminal. Before allocating Isaac
-Sim or spending API tokens, run the complete local preflight in a second
-terminal:
+The runtime follows the original EMERGE two-terminal boundary. Terminal 1 owns
+the persistent heavy-model services. Terminal 2 owns EMERGE, its Controller,
+and the BEHAVIOR evaluator. Starting the SAM3 service does not make the Agent
+segment every frame: only an `object_location` sub-agent call sends current
+images and prompts to that service.
+
+The original repository layout expects the SAM3 source submodule and checkpoint
+at these locations:
+
+```text
+third_party/sam3/
+checkpoints/sam3/model.pt
+```
+
+Initialize the submodule and install the project as described in the root
+README. Then start both BEHAVIOR model services in terminal 1:
+
+```bash
+cd /data/yxy/EMERGE-Humanoid
+
+OPENPI_GPU=0 \
+SAM3_GPU=0 \
+  bash scripts/Behavior_eval/start_behavior_services.sh
+```
+
+This wrapper uses the shared native
+`scripts/model_server/start_external_model_servers.sh` launcher. It selects the
+BEHAVIOR-specific OpenPI server on port 8011 and the standard EMERGE SAM3 server
+on port 8002. VGGT is omitted because BEHAVIOR already publishes calibrated
+metric depth.
+
+In terminal 2, run the local preflight before allocating Isaac Sim or spending
+API tokens:
 
 ```bash
 cd /data/yxy/EMERGE-Humanoid
@@ -69,9 +100,8 @@ cd /data/yxy/EMERGE-Humanoid
 ```
 
 `--preflight-only` does not create an episode, start Isaac Sim, or call the
-LLM. A passing result means the provider configuration can be constructed, the
-local SAM3 health endpoint responds, all required repositories and executables
-exist, the checkpoint and robot config exist, and the two runtime ports are
+LLM. It requires both external model services to be healthy, validates the
+provider and local BEHAVIOR files, and confirms that the EMERGE gateway port is
 free.
 
 Then start the real episode with a fresh output directory:
@@ -79,22 +109,21 @@ Then start the real episode with a fresh output directory:
 ```bash
 cd /data/yxy/EMERGE-Humanoid
 
-B1K_RUN_DIR="/data/yxy/emerge_pi05_eval/turning_on_radio_agent_$(date +%Y%m%d_%H%M%S)"
-
 /home/embodied/miniconda3/envs/phyagentos/bin/python \
   scripts/Behavior_eval/eval_behavior_agent.py \
   --driver-config dev/behavior_agent_eval.json \
   --instance-index 0 \
-  --max-steps 6000 \
   --agent-model gpt-5.6-sol \
-  --agent-max-iterations 80 \
   --max-agent-feedback-rounds 2 \
   --episode-timeout 7200 \
   --write-video \
   --no-headless \
-  --show-agent-events \
-  --output-dir "$B1K_RUN_DIR"
+  --show-agent-events
 ```
+
+When `--output-dir` is omitted, every invocation automatically uses a fresh
+`/data/yxy/emerge_pi05_eval/turning_on_radio_agent_YYYYMMDD_HHMMSS/`
+directory. Pass `--output-dir` only when an explicit location is required.
 
 The Agent uses EMERGE's native `~/.Emerge/config.json` provider configuration.
 Pass `--config /path/to/config.json` only when an episode needs a different
@@ -123,11 +152,11 @@ Logs are written under `<output-dir>/logs/`. The durable episode summary is
 `<output-dir>/agent_episode_result.json`; official BEHAVIOR JSON and videos are
 written by the evaluator in the same output tree.
 
-The runner now requires the configured SAM3 `/healthz` endpoint before it
-starts OpenPI or Isaac Sim. This prevents an expensive run from silently
-dropping the measured-approach phase. Add `--no-require-perception` only when a
-π0.5-only fallback run is intentional. BEHAVIOR uses native calibrated RGB-D,
-so an Agent config that explicitly selects `geometryBackend: vggt` is rejected.
+The runner connects to the already-running OpenPI and SAM3 endpoints; it does
+not own either model process. It refuses to start Isaac Sim when either service
+is unhealthy, preventing an expensive run from silently dropping π0.5 control
+or measured localization. BEHAVIOR uses native calibrated RGB-D, so an Agent
+config that explicitly selects `geometryBackend: vggt` is rejected.
 
 ## Verify
 
@@ -145,10 +174,13 @@ Verify a finished episode using only its artifacts:
 ```bash
 /home/embodied/miniconda3/envs/phyagentos/bin/python -B \
   -m scripts.Behavior_eval.checks.verify_artifacts \
-  --output-dir "$B1K_RUN_DIR" \
+  --output-dir /data/yxy/emerge_pi05_eval/turning_on_radio_agent_YYYYMMDD_HHMMSS \
   --require-success \
   --require-agent-result
 ```
+
+Replace `YYYYMMDD_HHMMSS` with the directory name printed by the completed
+runner.
 
 ## External BEHAVIOR requirements
 
@@ -175,28 +207,14 @@ installation in `/data/yxy/envs/behavior` to configure its own paths.
 
 ## Perception services for measured approach
 
-The π0.5-only fallback works without the perception server. BEHAVIOR geometry
-comes directly from the official aligned `depth_linear` observations, so this
-pipeline does not start or call VGGT. To enable prompted object masks, start
-SAM3 on its reserved port before the episode:
-
-```bash
-cd /data/yxy/EMERGE-Humanoid
-SAM3_PYTHON=/home/embodied/zhoukr/robo_age/scripts/sam3/.venv/bin/python \
-SAM3_PYTHONPATH=/home/embodied/.local/lib/python3.10/site-packages \
-SAM3_BACKEND=transformers \
-SAM3_CHECKPOINT=/home/embodied/.cache/modelscope/hub/models/facebook/sam3 \
-SAM3_CONFIDENCE_THRESHOLD=0.3 \
-SAM3_GPU=0 \
-  bash scripts/model_server/start_external_model_servers.sh --services sam3
-```
-
-This reuses the existing local ModelScope checkpoint and the existing isolated
-SAM3 Transformers environment; it does not download or copy model weights. The
-model is loaded once when the websocket server starts and remains resident for
-all localization calls. If SAM3 is absent or localization cannot confirm the
-control, the Agent follows the skill's bounded VLA fallback instead of
-inventing coordinates.
+SAM3 remains an external persistent service exactly as in the original EMERGE
+LIBERO path. The service loads the model once and waits on port 8002. The Main
+Agent decides when to delegate to `object_location`; its specialist inspects
+the current views, constructs appearance prompts, invokes `segment_candidates`,
+reviews the returned overlays, and only then requests three-dimensional
+localization. `locate_candidates` reuses the cached masks. BEHAVIOR replaces
+the original VGGT geometry stage with its calibrated `depth_linear` arrays;
+the Agent/SAM3 delegation contract remains unchanged.
 
 ## Current limits
 

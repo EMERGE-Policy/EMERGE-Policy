@@ -127,6 +127,8 @@ class LocationEngine:
                 "No candidate masks are available. Call segment_candidates first."
             )
 
+        required_views = self._required_verified_views()
+
         candidates_by_id = {
             candidate["candidate_id"]: candidate
             for candidate in self._segmentation.candidates
@@ -146,10 +148,10 @@ class LocationEngine:
                 )
             verified_instances = _verified_instances(selection)
             verified_views = list(verified_instances)
-            if len(verified_views) < self._min_consistent_views:
+            if len(verified_views) < required_views:
                 raise ValueError(
                     f"Selection {selection['object_key']!r} requires at least "
-                    f"{self._min_consistent_views} distinct verified views"
+                    f"{required_views} distinct verified views"
                 )
             unknown_views = set(verified_views) - available_views
             if unknown_views:
@@ -174,7 +176,7 @@ class LocationEngine:
                 selected_masks,
                 targets,
                 min_points=self._min_points,
-                min_consistent_views=self._min_consistent_views,
+                min_consistent_views=required_views,
             )
         else:
             objects = estimate_object_locations(
@@ -198,6 +200,12 @@ class LocationEngine:
             result["candidate_id"] = selection["candidate_id"]
             result["semantic_verified"] = True
             verified_instances = _verified_instances(selection)
+            result["geometry_evidence"] = (
+                "single_view_calibrated_rgbd"
+                if self._active_geometry_backend == "rgbd"
+                and len(verified_instances) == 1
+                else "multi_view"
+            )
             result["verified_views"] = list(verified_instances)
             result["verified_instances"] = [
                 {"view_name": view_name, "instance_index": instance_index}
@@ -229,6 +237,14 @@ class LocationEngine:
                     "method": "calibrated_rgbd",
                     "frame": observation.coordinate_frame,
                 },
+                # SegmentCandidatesTool renders the reviewed masks over these
+                # source images.  VGGT returns its own view payload, whereas
+                # native RGB-D geometry does not invoke a model server, so keep
+                # the observation RGB here explicitly.
+                "views": [
+                    {"name": view.name, "rgb": view.rgb}
+                    for view in observation.views
+                ],
             }
             return self._geometry
         started = time.perf_counter()
@@ -252,6 +268,18 @@ class LocationEngine:
             time.perf_counter() - started,
         )
         return self._geometry
+
+    def _required_verified_views(self) -> int:
+        """Return the geometric view requirement for the active backend.
+
+        A calibrated RGB-D image has metric depth and an explicit transform to
+        the observation frame, so one visually verified mask is sufficient to
+        measure a visible-surface box.  Reconstructed RGB geometry keeps the
+        configured multi-view consensus requirement.
+        """
+        if self._active_geometry_backend == "rgbd":
+            return 1
+        return self._min_consistent_views
 
     async def _infer_sam3(self, request: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()

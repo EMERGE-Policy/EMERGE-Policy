@@ -8,6 +8,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 CONDA_BIN="${CONDA_BIN:-conda}"
 OPENPI_ENV="${OPENPI_ENV:-pi05_server}"
 OPENPI_PYTHON="${OPENPI_PYTHON:-}"
+OPENPI_SERVER_MODE="${OPENPI_SERVER_MODE:-standard}"
+OPENPI_ROOT="${OPENPI_ROOT:-${REPO_ROOT}/third_party/openpi}"
 PERCEPTION_ENV="${PERCEPTION_ENV:-EmergePolicy}"
 SAM3_PYTHON="${SAM3_PYTHON:-}"
 SAM3_PYTHONPATH="${SAM3_PYTHONPATH:-}"
@@ -29,6 +31,10 @@ WAM_GPU="${WAM_GPU:-0}"
 
 OPENPI_CONFIG="${OPENPI_CONFIG:-pi05_libero}"
 OPENPI_CHECKPOINT="${OPENPI_CHECKPOINT:-${REPO_ROOT}/checkpoints/pi05_libero}"
+OPENPI_B1K_ROBOT="${OPENPI_B1K_ROBOT:-b1k/R1Pro}"
+OPENPI_B1K_TASK="${OPENPI_B1K_TASK:-b1k/turning_on_radio}"
+OPENPI_B1K_REPO_ID="${OPENPI_B1K_REPO_ID:-turning_on_radio}"
+OPENPI_B1K_POLICY_CONFIG="${OPENPI_B1K_POLICY_CONFIG:-pi05_b1k}"
 OPENPI_MAX_BATCH_SIZE="${OPENPI_MAX_BATCH_SIZE:-4}"
 OPENPI_BATCH_WAIT_MS="${OPENPI_BATCH_WAIT_MS:-10}"
 VGGT_MAX_BATCH_SIZE="${VGGT_MAX_BATCH_SIZE:-4}"
@@ -81,6 +87,9 @@ Service selection and runtime:
                                 (default: auto-detect python3 or python)
 
 OpenPI:
+  OPENPI_SERVER_MODE             standard or behavior_b1k (default: standard)
+  OPENPI_ROOT                    OpenPI checkout used by behavior_b1k mode
+                                (default: <repo>/third_party/openpi)
   OPENPI_ENV                    Conda environment (default: pi05_server)
   OPENPI_PYTHON                 Direct Python executable; bypasses OPENPI_ENV
                                 (default: empty)
@@ -89,6 +98,12 @@ OpenPI:
   OPENPI_CONFIG                 Training config name (default: pi05_libero)
   OPENPI_CHECKPOINT             Checkpoint directory
                                 (default: <repo>/checkpoints/pi05_libero)
+  OPENPI_B1K_ROBOT              BEHAVIOR robot key (default: b1k/R1Pro)
+  OPENPI_B1K_TASK               BEHAVIOR task key
+                                (default: b1k/turning_on_radio)
+  OPENPI_B1K_REPO_ID            Norm-stat repository ID
+                                (default: turning_on_radio)
+  OPENPI_B1K_POLICY_CONFIG      OpenPI training config (default: pi05_b1k)
   OPENPI_MAX_BATCH_SIZE         Maximum requests per batch (default: 4)
   OPENPI_BATCH_WAIT_MS          Maximum batch collection time in ms
                                 (default: 10)
@@ -401,6 +416,22 @@ echo "Selected services: ${SERVICES}"
 
 if service_enabled openpi; then
     check_port "OpenPI" "${OPENPI_PORT}"
+    case "${OPENPI_SERVER_MODE}" in
+        standard) ;;
+        behavior_b1k)
+            require_path "OpenPI root" "${OPENPI_ROOT}"
+            require_path "BEHAVIOR OpenPI server" "${OPENPI_ROOT}/scripts/b1k/serve_b1k.py"
+            require_path "BEHAVIOR π0.5 checkpoint" "${OPENPI_CHECKPOINT}"
+            if [[ -z "${OPENPI_PYTHON}" ]]; then
+                echo -e "${RED}✗ behavior_b1k mode requires OPENPI_PYTHON${RESET}" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${RED}✗ OPENPI_SERVER_MODE must be standard or behavior_b1k${RESET}" >&2
+            exit 2
+            ;;
+    esac
 fi
 if service_enabled vggt; then
     check_port "VGGT" "${VGGT_PORT}"
@@ -423,26 +454,45 @@ if service_enabled cosmos; then
 fi
 
 if service_enabled openpi; then
-    openpi_command=(
-        "${OPENPI_PYTHON:-python}" -m external_model_server.openpi_batch_server
-        --config-name "${OPENPI_CONFIG}"
-        --checkpoint-dir "${OPENPI_CHECKPOINT}"
-        --port "${OPENPI_PORT}"
-        --max-batch-size "${OPENPI_MAX_BATCH_SIZE}"
-        --batch-wait-ms "${OPENPI_BATCH_WAIT_MS}"
-    )
-    if [[ -n "${OPENPI_PYTHON}" ]]; then
-        start_server_with_python \
-            "OpenPI server :${OPENPI_PORT}" \
+    if [[ "${OPENPI_SERVER_MODE}" == "behavior_b1k" ]]; then
+        openpi_command=(
+            "${OPENPI_PYTHON}"
+            scripts/b1k/serve_b1k.py
+            --robot "${OPENPI_B1K_ROBOT}"
+            --task "${OPENPI_B1K_TASK}"
+            --repo-id "${OPENPI_B1K_REPO_ID}"
+            --policy.config "${OPENPI_B1K_POLICY_CONFIG}"
+            --policy.dir "${OPENPI_CHECKPOINT}"
+            --port "${OPENPI_PORT}"
+        )
+        start_server_with_python_in_directory \
+            "OpenPI BEHAVIOR server :${OPENPI_PORT}" \
             "${OPENPI_PYTHON}" \
             "${OPENPI_GPU}" \
+            "${OPENPI_ROOT}" \
             "${openpi_command[@]}"
     else
-        start_server \
-            "OpenPI server :${OPENPI_PORT}" \
-            "${OPENPI_ENV}" \
-            "${OPENPI_GPU}" \
-            "${openpi_command[@]}"
+        openpi_command=(
+            "${OPENPI_PYTHON:-python}" -m external_model_server.openpi_batch_server
+            --config-name "${OPENPI_CONFIG}"
+            --checkpoint-dir "${OPENPI_CHECKPOINT}"
+            --port "${OPENPI_PORT}"
+            --max-batch-size "${OPENPI_MAX_BATCH_SIZE}"
+            --batch-wait-ms "${OPENPI_BATCH_WAIT_MS}"
+        )
+        if [[ -n "${OPENPI_PYTHON}" ]]; then
+            start_server_with_python \
+                "OpenPI server :${OPENPI_PORT}" \
+                "${OPENPI_PYTHON}" \
+                "${OPENPI_GPU}" \
+                "${openpi_command[@]}"
+        else
+            start_server \
+                "OpenPI server :${OPENPI_PORT}" \
+                "${OPENPI_ENV}" \
+                "${OPENPI_GPU}" \
+                "${openpi_command[@]}"
+        fi
     fi
 fi
 
