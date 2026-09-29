@@ -18,10 +18,15 @@ Use VLA when the target is visible and the next phase involves adaptive alignmen
 
 ### Phase-Local Instructions
 
-Every `vla_execute` instruction must describe exactly the next unfinished
+Every `vla_execute` instruction normally describes exactly the next unfinished
 visual-contact phase, even when the current PLAN subgoal combines grasp,
-transport, and placement. Never copy the Mission, mention a later object, or
-combine grasp and final placement in one instruction.
+transport, and placement. The active embodiment profile is authoritative:
+when it declares a fixed episode instruction, copy the runtime
+`effective_prompt` exactly for every VLA call and keep the current phase in the
+plan and reasoning instead. Never rewrite a fixed checkpoint instruction.
+
+When the embodiment accepts phase-local prompts, never copy the Mission,
+mention a later object, or combine grasp and final placement in one instruction.
 
 Keep it to one short imperative sentence: include only the current action,
 active object, and destination when needed. Omit reasoning, observations,

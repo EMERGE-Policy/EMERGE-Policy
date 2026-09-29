@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -19,10 +18,6 @@ from urllib.parse import urlsplit, urlunsplit
 SCRIPT_DIR = Path(__file__).resolve().parent
 EMERGE_ROOT = SCRIPT_DIR.parents[1]
 WORKSPACE_ROOT = EMERGE_ROOT.parent
-
-SKILL_NAME = "vla"
-SKILL_SOURCE = SCRIPT_DIR / "workspace_skill" / "SKILL.md"
-
 
 # --------------------------------------------------------------------------- #
 # Paths
@@ -277,27 +272,6 @@ def wait_for_condition(
             return
         time.sleep(poll_interval_s)
     raise TimeoutError(f"timed out after {timeout_s:.0f}s while waiting for {label}")
-
-
-def install_workspace_skill(
-    workspace: Path,
-    *,
-    source: Path | None = None,
-) -> Path:
-    """Install the BEHAVIOR ``vla`` skill into the episode workspace.
-
-    The skill directory is named ``vla`` on purpose: ``SkillsLoader`` resolves a
-    workspace skill before the builtin one of the same name, so this shadows the
-    generic manipulation skill whose phase-local instruction rule contradicts
-    the frozen checkpoint prompt.
-    """
-    skill_source = Path(source) if source is not None else SKILL_SOURCE
-    if not skill_source.is_file():
-        raise FileNotFoundError(f"workspace skill source not found: {skill_source}")
-    destination = Path(workspace) / "skills" / SKILL_NAME / "SKILL.md"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(skill_source, destination)
-    return destination
 
 
 def prepare_workspace(

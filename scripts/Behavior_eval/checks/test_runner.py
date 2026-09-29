@@ -609,14 +609,14 @@ class ResumeDecisionTest(unittest.TestCase):
 
 
 class AgentWorkspacePreparationTest(unittest.TestCase):
-    def test_preparation_installs_the_skill_and_does_not_duplicate_instructions(self) -> None:
+    def test_preparation_uses_generic_skills_and_does_not_duplicate_instructions(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary) / "workspace"
             _prepare_workspace(workspace)
             _prepare_workspace(workspace)
             agents = (workspace / "AGENTS.md").read_text(encoding="utf-8")
             self.assertEqual(agents.count("BEHAVIOR-1K Evaluation Rules"), 1)
-            self.assertTrue((workspace / "skills/vla/SKILL.md").is_file())
+            self.assertFalse((workspace / "skills/vla/SKILL.md").exists())
             self.assertTrue((workspace / "ACTION.md").is_file())
             self.assertIn("turning_on_radio", (workspace / "ROBOT_STATE.md").read_text())
 

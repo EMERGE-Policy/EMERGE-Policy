@@ -49,7 +49,6 @@ from scripts.Behavior_eval.runner_common import (  # noqa: E402
     atomic_write_json,
     behavior_environment,
     default_output_dir,
-    install_workspace_skill,
     prepare_workspace,
     read_json,
     require_executable,
@@ -86,10 +85,12 @@ EVALUATION_INSTRUCTIONS = f"""
 You control one R1Pro episode for `turning_on_radio` through the
 `behavior_r1pro` driver.
 
-- Follow the phased route in the active `vla` skill: bounded VLA navigation,
-  calibrated object localization, measured pre-contact motion when available,
-  short VLA contact, and evidence-based recovery.
-- The instruction must be exactly, character for character: `{OFFICIAL_PROMPT}`
+- Plan from the current observation and task state using EMERGE's generic
+  planning, object-location, attach, VLA, and verification skills. No benchmark
+  task route is preselected for you.
+- This checkpoint has a fixed episode instruction. For every `vla_execute`,
+  copy `robots.behavior_r1pro.effective_prompt` exactly; for this episode it is
+  `{OFFICIAL_PROMPT}`. Do not rewrite it as a phase-local prompt.
 - `step` is an action budget and must not exceed
   `robots.behavior_r1pro.max_action_steps` in `ROBOT_STATE.md`.
 - Use bounded chunks and inspect `ROBOT_STATE.md` after every action.
@@ -246,7 +247,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _prepare_workspace(workspace: Path) -> Path:
-    """Sync templates, install the BEHAVIOR skill, and reset the queue."""
+    """Sync generic EMERGE templates, add benchmark rules, and reset the queue."""
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, silent=True)
     agents_path = workspace / "AGENTS.md"
@@ -257,7 +258,6 @@ def _prepare_workspace(workspace: Path) -> Path:
             encoding="utf-8",
         )
     prepare_workspace(workspace, task_name=TASK_NAME, instruction=OFFICIAL_PROMPT)
-    install_workspace_skill(workspace)
     return workspace
 
 
@@ -456,12 +456,12 @@ def _agent_message(max_action_steps: int) -> str:
     return (
         "Complete this BEHAVIOR-1K simulated robot task:\n\n"
         f"{OFFICIAL_PROMPT}\n\n"
-        "Act autonomously through execute_robot_action and follow the phased route in "
-        "the active BEHAVIOR vla skill. Use the exact instruction above for every VLA "
-        f"call and request at most {max_action_steps} steps per action. Start with a "
-        "bounded navigation chunk, then use fresh observations, calibrated localization "
-        "and measured primitives when their preconditions hold. Recover from lack of "
-        "progress instead of repeating the same long VLA rollout. "
+        "Act autonomously through execute_robot_action. Use EMERGE's generic skills to "
+        "plan from current evidence; the runner does not prescribe a task-specific route. "
+        "For every VLA call, copy robots.behavior_r1pro.effective_prompt exactly and "
+        f"request at most {max_action_steps} steps. Re-read fresh state after each action, "
+        "use measured geometry only when its preconditions hold, and change strategy after "
+        "repeated lack of progress. "
         "Do not finish while official success is false unless the evaluator has terminated."
     )
 
@@ -475,7 +475,7 @@ def _feedback_message(status: dict[str, Any], max_action_steps: int) -> str:
         f"Current evaluator status: {json.dumps(status, ensure_ascii=False)}\n"
         f"Maximum steps per action: {max_action_steps}.\n\n"
         "Inspect ROBOT_STATE.md, ACTION.md, the latest camera manifest, and PLAN.md before "
-        "acting. Resume the correct phase; do not restart the rollout or repeat a failed "
+        "acting. Resume the current plan; do not restart the rollout or repeat a failed "
         "action without new evidence."
     )
 
@@ -1011,7 +1011,6 @@ def main() -> int:
         "evaluator_status": status,
         "agent_feedback_rounds": feedback_rounds,
         "agent_results": agent_results,
-        "workspace_skill": str(workspace / "skills/vla/SKILL.md"),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "duration_s": round(time.monotonic() - start_time, 3),

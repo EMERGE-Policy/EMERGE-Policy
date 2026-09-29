@@ -26,16 +26,12 @@ gateway status. Read both files again after every physical action.
 Use the official π0.5 policy for coarse whole-body navigation and visually
 sensitive contact:
 
-```json
-{
-  "instruction": "Turn on the radio receiver that's on the table in the living room.",
-  "step": 300
-}
-```
-
-The instruction must be exactly that sentence. `step` is a positive policy
-action budget no larger than `robots.behavior_r1pro.max_action_steps`. Use
-bounded chunks and inspect progress between them.
+This single-task policy endpoint uses a fixed episode instruction. Copy
+`robots.behavior_r1pro.effective_prompt` exactly into every `vla_execute` call;
+keep the current local phase in `PLAN.md` and the action reasoning rather than
+rewriting the policy prompt. `step` is a positive policy action budget no
+larger than `robots.behavior_r1pro.max_action_steps`. Use bounded chunks and
+inspect progress between them.
 
 ### `move_to_pose`
 
@@ -68,15 +64,16 @@ is omitted, both motion primitives preserve the current wrist orientation.
 ### `move_linear`
 
 Move one end effector along a straight Cartesian path to a reachable measured
-position:
+position or relative displacement:
 
 ```json
-{"side": "right", "position_m": [0.61, -0.16, 0.89]}
+{"side": "right", "delta_m": [0.0, 0.0, 0.08]}
 ```
 
-Use this only for a short final approach or retreat through visibly clear
-space. It has the same `side`, `position_m`, and optional `orientation_quat`
-parameters as `move_to_pose`.
+Use this only for a short final approach, lift, or retreat through visibly
+clear space. Provide exactly one of absolute `position_m` or relative
+`delta_m`; `orientation_quat` is optional. This matches the generic attach
+skill contract.
 
 ### `set_gripper`
 
@@ -85,8 +82,8 @@ parameters as `move_to_pose`.
 ```
 
 Provide exactly one of `command` (`open` or `close`) and `opening_m` (0.0 to
-0.1 metres). `steps` is optional. Turning on the radio normally does not
-require a grasp, so do not close a gripper without a concrete reason.
+0.1 metres). `steps` is optional. Close a gripper only when the current plan
+and visible geometry provide a concrete reason.
 
 ### `hold_position`
 
@@ -98,8 +95,10 @@ This repeats current joint and gripper positions with zero base velocity. Use
 it only for synchronization or diagnosis. Reasoning itself does not require a
 hold because the simulator is paused between actions.
 
-`gateway_status` is read-only. `follow_arc`, `attach`, and `navigate_vln` are
-not implemented by this driver.
+`gateway_status` is read-only. `attach` is a generic EMERGE skill that composes
+the supported `move_to_pose`, `move_linear`, and `set_gripper` actions; it is
+not a separate driver action. `follow_arc` and `navigate_vln` are not
+implemented by this driver.
 
 Every local primitive is bounded by official joint limits and a per-step joint
 change limit. Before dispatch, the driver compares URDF forward kinematics with
@@ -115,28 +114,3 @@ succeeded. The sole authoritative success signal is
 `evaluation.success == true` together with `evaluation.phase == "completed"`.
 Stop immediately when `evaluation.done` is true. Treat `evaluation.phase ==
 "error"` as an evaluator failure.
-
-## Required task route
-
-1. Confirm evaluator and OpenPI connectivity and inspect the newest views.
-2. Use one 200-400 step `vla_execute` chunk for coarse navigation. Repeat only
-   when the new head view shows meaningful approach progress.
-3. Once the radio is clearly visible and plausibly within arm reach, call the
-   `object_location` specialist. Ask it to locate the radio and, when visibly
-   separable in at least two views, its power control. The returned frame must
-   be `robot_base`.
-4. If a control bounding box is measured and reachable, pass its
-   `bbox_world_min_m` and `bbox_world_max_m` directly to `move_to_pose` with a
-   0.08-0.15 m standoff. Let the driver derive the near-surface clearance point
-   and preserve wrist orientation. Use a short `move_linear` only when its
-   entire path is visibly clear.
-5. Use a short 80-160 step `vla_execute` chunk for the final visual alignment
-   and button contact. Re-read official state and fresh images.
-6. Call `task_verification` when visible evidence of the radio state is useful,
-   but never replace the official evaluator success signal with its answer.
-
-If localization is unavailable or cannot distinguish the control, keep using
-bounded VLA chunks; do not invent coordinates. If IK rejects a target, use a
-short VLA repositioning chunk, obtain a fresh observation, and localize again.
-After two VLA chunks with no visible approach progress, do not blindly repeat a
-third: localize, change the recovery action, or report the observed blocker.
