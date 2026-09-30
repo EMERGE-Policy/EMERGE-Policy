@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
 
 from scripts.Behavior_eval.eval_behavior_agent import (
@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[3]
 PROFILE = ROOT / "robot/profiles/behavior_r1pro.md"
 GENERIC_VLA = ROOT / "Emerge/skills/vla/SKILL.md"
 GENERIC_ATTACH = ROOT / "Emerge/skills/attach/SKILL.md"
+TASK_GUIDANCE = ROOT / "scripts/Behavior_eval/tasks/turning_on_radio.md"
 
 
 class BehaviorAgentPlanTest(unittest.TestCase):
@@ -53,17 +54,33 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         self.assertNotIn("Required task route", profile)
         self.assertNotIn("Turning on the radio normally", profile)
 
-    def test_runner_prompt_keeps_protocol_without_prescribing_a_route(self) -> None:
+    def test_runner_prompt_keeps_protocol_and_requires_the_task_contract(self) -> None:
         self.assertIn("calibrated", EVALUATION_INSTRUCTIONS)
         self.assertIn("object_location", EVALUATION_INSTRUCTIONS)
         self.assertIn("move_to_pose", EVALUATION_INSTRUCTIONS)
-        self.assertIn("task route is preselected", EVALUATION_INSTRUCTIONS)
+        self.assertIn("task execution contract", EVALUATION_INSTRUCTIONS)
         self.assertNotIn("Follow the phased route", EVALUATION_INSTRUCTIONS)
         initial = _agent_message(6002)
         feedback = _feedback_message({"success": False}, 6002)
         self.assertIn("generic skills", initial)
-        self.assertIn("does not prescribe a task-specific route", initial)
+        self.assertIn("grasping and reorientation before localizing the button", initial)
         self.assertIn("Resume the current plan", feedback)
+
+    def test_task_contract_delays_button_localization_until_after_reorientation(self) -> None:
+        guidance = TASK_GUIDANCE.read_text(encoding="utf-8")
+        phases = (
+            "Locate the whole radio with the head RGB-D view",
+            "Approach the radio body",
+            "Grasp and reorient the radio",
+            "Verify the new pose",
+            "Relocalize the exposed button",
+            "Press and hold with the other arm",
+        )
+        positions = [guidance.index(phase) for phase in phases]
+        self.assertEqual(positions, sorted(positions))
+        normalized = " ".join(guidance.split())
+        self.assertIn("do not localize or press the button", normalized)
+        self.assertIn("changes from red to green", normalized)
 
     def test_generic_vla_defers_fixed_prompt_semantics_to_the_embodiment(self) -> None:
         skill = GENERIC_VLA.read_text(encoding="utf-8")

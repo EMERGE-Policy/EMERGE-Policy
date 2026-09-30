@@ -65,6 +65,8 @@ DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
 DEFAULT_GATEWAY_PORT = 8000
 DEFAULT_OPENPI_PORT = 8011
 BEHAVIOR_RGBD_WRAPPER = "omnigibson.eval.wrappers.RGBDFullResWrapper"
+TASK_GUIDANCE_PATH = SCRIPT_DIR / "tasks" / "turning_on_radio.md"
+TASK_GUIDANCE_MARKER = "## turning_on_radio execution contract"
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -86,8 +88,8 @@ You control one R1Pro episode for `turning_on_radio` through the
 `behavior_r1pro` driver.
 
 - Plan from the current observation and task state using EMERGE's generic
-  planning, object-location, attach, VLA, and verification skills. No benchmark
-  task route is preselected for you.
+  planning, object-location, attach, VLA, and verification skills. Follow the
+  task execution contract appended below these evaluation rules.
 - This checkpoint has a fixed episode instruction. For every `vla_execute`,
   copy `robots.behavior_r1pro.effective_prompt` exactly; for this episode it is
   `{OFFICIAL_PROMPT}`. Do not rewrite it as a phase-local prompt.
@@ -265,10 +267,11 @@ def _prepare_workspace(workspace: Path) -> Path:
     agents_path = workspace / "AGENTS.md"
     existing = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
     if "BEHAVIOR-1K Evaluation Rules" not in existing:
-        agents_path.write_text(
-            existing.rstrip() + "\n\n" + EVALUATION_INSTRUCTIONS + "\n",
-            encoding="utf-8",
-        )
+        existing = existing.rstrip() + "\n\n" + EVALUATION_INSTRUCTIONS + "\n"
+    if TASK_GUIDANCE_MARKER not in existing:
+        guidance = TASK_GUIDANCE_PATH.read_text(encoding="utf-8").strip()
+        existing = existing.rstrip() + "\n\n" + guidance + "\n"
+    agents_path.write_text(existing, encoding="utf-8")
     prepare_workspace(workspace, task_name=TASK_NAME, instruction=OFFICIAL_PROMPT)
     return workspace
 
@@ -470,7 +473,8 @@ def _agent_message(max_action_steps: int) -> str:
         "Complete this BEHAVIOR-1K simulated robot task:\n\n"
         f"{OFFICIAL_PROMPT}\n\n"
         "Act autonomously through execute_robot_action. Use EMERGE's generic skills to "
-        "plan from current evidence; the runner does not prescribe a task-specific route. "
+        "plan from current evidence and follow the turning_on_radio execution contract "
+        "in AGENTS.md. Complete grasping and reorientation before localizing the button. "
         "For every VLA call, copy robots.behavior_r1pro.effective_prompt exactly and "
         f"request at most {max_action_steps} steps. Re-read fresh state after each action, "
         "use measured geometry only when its preconditions hold, and change strategy after "

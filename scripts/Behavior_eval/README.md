@@ -14,6 +14,7 @@ robot and the official single-task π0.5 checkpoint.
 |---|---|
 | `eval_behavior_agent.py` | Creates one episode workspace and supervises the Agent, Controller, OpenPI server, and BEHAVIOR evaluator. |
 | `runner_common.py` | Shared process, port, workspace, and artifact helpers. |
+| `tasks/turning_on_radio.md` | Task execution contract: whole-radio localization, grasp/reorientation, then exposed-button localization and held press. |
 | `robot/drivers/behavior_r1pro_driver.py` | Native EMERGE driver consumed by `robot.controller`. |
 | `robot/behavior/` | BEHAVIOR websocket protocol, status contract, and observation publishing. |
 | `robot/profiles/behavior_r1pro.md` | Controller-installed robot profile. |
@@ -152,7 +153,9 @@ action state changes in the runner terminal. Provider-hidden reasoning is not
 available, and is not written by EMERGE.
 
 The Agent chooses every action through `execute_robot_action`; the runner does
-not enqueue actions on its behalf or install a task-specific skill. It uses the
+not enqueue actions on its behalf or install a task-specific skill. The runner
+adds a benchmark task contract to `AGENTS.md` so task-required physical order
+is explicit without shadowing any reusable skill. It uses the
 same generic planning, object-location, attach, VLA, and verification skills as
 the LIBERO path. It can combine bounded π0.5 chunks with
 calibrated `object_location`, native R1Pro `move_to_pose` / `move_linear` /
