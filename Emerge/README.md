@@ -92,22 +92,27 @@ pip install -e .
 
 Python 3.10 or later is required. Robot environments, external model servers, checkpoints, and evaluation dependencies are documented in the repository-level README and the guides under `scripts/`.
 
-## Initialize the workspace
+## First launch
 
-Create the default configuration and workspace:
+Start Emerge directly:
 
 ```bash
-emerge workspace init
+emerge
 ```
 
-This creates:
+On first launch, follow the prompts to select a provider, enter a model ID, and
+configure your API address and credentials. For visual robot tasks, choose a
+model with image input and tool calling.
+
+Default paths:
 
 ```text
 ~/.Emerge/config.json
 ~/.Emerge/workspace/
 ```
 
-Running the command again refreshes the configuration schema and adds missing workspace templates without replacing existing workspace files unless configuration overwrite is explicitly confirmed.
+Use `--config` for a different configuration file or `--workspace` for a different
+workspace.
 
 Inspect the active paths, model, and provider state with:
 
@@ -194,6 +199,11 @@ emerge \
 ```
 
 Type `/` in an empty prompt to open the command palette. Available operations include starting a new session, resuming a saved session, changing the model, stopping a run, checking service health, viewing logs, toggling tool details, inspecting workspace paths, exporting the conversation, and viewing recent run artifacts.
+
+Drag over conversation text to select it; releasing the mouse copies the
+selection. Use the mouse wheel or `PageUp` / `PageDown` to scroll. `Ctrl+C`
+copies selected text; with no selection, it stops the current run or exits.
+Press `Esc` to clear the selection and return to typing.
 
 ### Reload the environment with `/reset`
 

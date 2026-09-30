@@ -19,6 +19,8 @@ class CurrentSubgoal:
 
 def read_current_subgoal(plan_file: Path) -> CurrentSubgoal | None:
     content = plan_file.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
     plan = UpdatePlanTool._parse(content)
     revision = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 

@@ -6,16 +6,19 @@ def style(light: bool = False) -> Style:
     if light:
         colors = {
             "bg": "#fff8ee", "panel": "#f4e7d4", "text": "#30261d",
-            "muted": "#806f60", "accent": "#d96b18", "brand": "#9a4300",
+            "muted": "#806f60", "soft": "#68594b", "line": "#d9c5ac",
+            "accent": "#d96b18", "brand": "#9a4300",
         }
     else:
         colors = {
             "bg": "#110f0d", "panel": "#1d1813", "text": "#f3e8da",
-            "muted": "#9d8b78", "accent": "#ff9d3d", "brand": "#ffd09a",
+            "muted": "#9d8b78", "soft": "#c8b8a6", "line": "#4d3e31",
+            "accent": "#ff9d3d", "brand": "#ffd09a",
         }
     c = colors
     return Style.from_dict({
         "": f"bg:{c['bg']} {c['text']}",
+        "background": f"bg:{c['bg']} {c['text']}",
         "header": f"bg:{c['panel']}",
         "brand.logo": f"{c['accent']} bold",
         "brand.name": f"{c['brand']} bold",
@@ -30,6 +33,25 @@ def style(light: bool = False) -> Style:
         "system": c["muted"],
         "palette": f"bg:{c['panel']} {c['text']}",
         "selected": f"bg:{c['accent']} {c['bg']} bold",
+        "selected-text": f"bg:{c['accent']} {c['bg']}",
+        "setup.rail": f"bg:{c['panel']} {c['text']}",
+        "setup.rail-logo": f"bg:{c['panel']} {c['accent']} bold",
+        "setup.rail-meta": f"bg:{c['panel']} {c['muted']}",
+        "setup.rail-step": f"bg:{c['panel']} {c['brand']} bold",
+        "setup.rail-title": f"bg:{c['panel']} {c['soft']} bold",
+        "setup.eyebrow": f"{c['accent']} bold",
+        "setup.step": c["muted"],
+        "setup.rule": c["line"],
+        "setup.title": f"{c['brand']} bold",
+        "setup.description": c["soft"],
+        "setup.option": c["text"],
+        "setup.option-meta": c["muted"],
+        "setup.selected": f"bg:{c['accent']} {c['bg']} bold",
+        "setup.input": f"bg:{c['panel']} {c['text']}",
+        "setup.input-marker": f"bg:{c['panel']} {c['accent']} bold",
+        "setup.key": f"{c['brand']} bold",
+        "setup.help": c["muted"],
+        "setup.position": c["soft"],
         "sidebar": c["muted"],
         "sidebar.label": "#9aa4ad",
         "sidebar.value": "#f2d6ad",

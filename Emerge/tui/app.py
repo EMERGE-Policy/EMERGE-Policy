@@ -14,6 +14,7 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.bindings.scroll import scroll_page_down, scroll_page_up
 from prompt_toolkit.layout import (
     ConditionalContainer,
     Float,
@@ -48,6 +49,7 @@ from Emerge.runtime.snapshots import service_health, workspace_snapshot
 from Emerge.runtime.storage import WorkspaceLease, atomic_json
 from Emerge.runtime.workspace import reset_workspace_context
 from Emerge.session.manager import SessionManager
+from Emerge.tui.selection import CopyTextArea, TerminalClipboard
 from Emerge.tui.state import ViewState
 from Emerge.tui.theme import style
 from Emerge.utils.action_queue import cancel_actions
@@ -146,12 +148,13 @@ class WorkspaceApp:
         self.palette_index = 0
         self.palette_directory = None
 
-        self.transcript = TextArea(
+        self.transcript = CopyTextArea(
             read_only=True, scrollbar=True, wrap_lines=True, lexer=TranscriptLexer(),
         )
-        self.editor = TextArea(
+        self.editor = CopyTextArea(
             height=4, multiline=True, style="class:input", prompt=" › ",
         )
+        self.editor.buffer.on_text_changed += lambda _: self.clear_selection()
         self.palette_input = TextArea(height=1, multiline=False, style="class:palette")
         self.palette_input.buffer.on_text_changed += self._palette_changed
         palette = Frame(HSplit([
@@ -161,10 +164,15 @@ class WorkspaceApp:
             f"Scenes · {self.palette_directory or self.scene_status.get('root', '')}"
             if self.palette_directory is not None else "Slash commands"
         ))
-        self.side = Window(
-            FormattedTextControl(lambda: self.sidebar_fragments),
-            width=self.SIDEBAR_WIDTH, wrap_lines=True, always_hide_cursor=True,
+        self.side = CopyTextArea(
+            read_only=True, width=self.SIDEBAR_WIDTH, wrap_lines=True,
         )
+        self.header = CopyTextArea(
+            read_only=True, height=4, wrap_lines=False, style="class:header",
+        )
+        self.copy_areas = (self.transcript, self.editor, self.side, self.header)
+        for area in self.copy_areas:
+            area.focus_after_copy = self.editor.control
         body = VSplit([
             Frame(self.transcript, title="Conversation"),
             ConditionalContainer(
@@ -176,7 +184,7 @@ class WorkspaceApp:
             ),
         ])
         root = FloatContainer(HSplit([
-            Window(FormattedTextControl(self._header), height=4, style="class:header"),
+            self.header,
             body,
             Frame(self.editor, title="Message · Enter send · / commands"),
             Window(FormattedTextControl(self._footer), height=1, style="class:footer"),
@@ -187,13 +195,14 @@ class WorkspaceApp:
                 ),
                 width=72, top=4,
             ),
-        ])
+        ], style="class:background")
         self.application = Application(
             layout=Layout(root, focused_element=self.editor),
             key_bindings=self._bindings(),
             style=style(self.light),
             full_screen=True,
             mouse_support=True,
+            clipboard=TerminalClipboard(),
             min_redraw_interval=0.03,
         )
         self._restore_session()
@@ -233,8 +242,11 @@ class WorkspaceApp:
 
     def _footer(self):
         tokens = self.state.usage.get("total_tokens", 0)
+        clipboard = self.application.clipboard
+        if time.monotonic() < clipboard.notice_until:
+            return f" {clipboard.notice} · Esc clears selection"
         return (
-            f" / commands  Ctrl+C quit/stop  Esc close menu"
+            f" / commands  Drag to copy  Ctrl+C copy/stop/quit"
             f"  ·  {tokens} tokens  {self.state.duration_ms / 1000:.1f}s"
         )
 
@@ -248,6 +260,10 @@ class WorkspaceApp:
                 })
         if session.metadata.get("model"):
             self.state.model = session.metadata["model"]
+
+    def clear_selection(self):
+        for area in self.copy_areas:
+            area.buffer.exit_selection()
 
     def _bindings(self):
         keys = KeyBindings()
@@ -306,13 +322,30 @@ class WorkspaceApp:
             self.palette_index += 1
             self.application.invalidate()
 
+        @keys.add("pageup", filter=Condition(lambda: not self.palette_open))
+        @keys.add("pagedown", filter=Condition(lambda: not self.palette_open))
+        def scroll_transcript(event):
+            focused = event.app.layout.current_control
+            self.transcript.buffer.exit_selection()
+            event.app.layout.focus(self.transcript)
+            if event.key_sequence[0].key == "pageup":
+                scroll_page_up(event)
+            else:
+                scroll_page_down(event)
+            event.app.layout.focus(focused)
+
         @keys.add("escape")
         def escape(event):
             if self.palette_open:
                 self.close_palette()
+            self.clear_selection()
+            self.application.layout.focus(self.editor)
+            self.refresh()
 
         @keys.add("c-c")
         def control_c(event):
+            if any(area.copy_selection() for area in self.copy_areas):
+                return
             if self.palette_open:
                 self.close_palette()
             elif self.changing_environment:
@@ -357,6 +390,7 @@ class WorkspaceApp:
         ]
 
     def open_palette(self, entries, query="", *, directory=None):
+        self.clear_selection()
         self.palette_directory = directory
         self.palette_entries = entries
         self.palette_index = 0
@@ -522,7 +556,8 @@ class WorkspaceApp:
         elif command == "/keys":
             self.state.note(
                 "Enter sends · Alt+Enter/Ctrl+J inserts a newline · / opens commands "
-                "· Ctrl+C exits when idle or requests stop while running."
+                "· Drag text to copy · Esc clears selection · Ctrl+C copies a selection, "
+                "otherwise exits when idle or requests stop while running."
             )
         else:
             self.state.note("Unknown command. Press / at an empty prompt.")
@@ -903,8 +938,11 @@ class WorkspaceApp:
         elif robot["age_s"] is None:
             row(("sidebar.warn", "No snapshot"))
         else:
-            row(("sidebar.label", "Age  "), ("sidebar.count", f"{robot['age_s']:.0f}s"))
             robots = robot["data"].get("robots", {})
+            if not robots:
+                row(("sidebar.warn", "No robot state"))
+            else:
+                row(("sidebar.label", "Age  "), ("sidebar.count", f"{robot['age_s']:.0f}s"))
             for name, data in robots.items():
                 row(("robot.name", str(name)))
                 if isinstance(data, dict):
@@ -997,9 +1035,10 @@ class WorkspaceApp:
             len(content) if at_end
             else min(self.transcript.buffer.cursor_position, len(content))
         )
-        self.transcript.buffer.set_document(
-            Document(content, cursor), bypass_readonly=True,
-        )
+        if self.transcript.buffer.selection_state is None:
+            self.transcript.buffer.set_document(
+                Document(content, cursor), bypass_readonly=True,
+            )
         now = time.monotonic()
         if (
             force_snapshot
@@ -1015,6 +1054,8 @@ class WorkspaceApp:
                 self.scene_status = {}
             self.snapshot_time = now
         self.sidebar_fragments = self._build_sidebar(self.snapshot)
+        self.side.set_formatted_text(self.sidebar_fragments)
+        self.header.set_formatted_text(self._header())
         self.dirty = False
         self.application.invalidate()
 

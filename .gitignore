@@ -20,10 +20,12 @@ poetry.lock
 .pytest_cache/
 botpy.log
 nano.*.save
-tests
-test
+tests/
+test/
 .codex
 checkpoints
 .condaartifacts/
 artifacts/
 .DS_Store
+.ruff_cache/
+.agents/

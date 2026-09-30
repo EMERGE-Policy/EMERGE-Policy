@@ -15,7 +15,10 @@ def plan_snapshot(workspace: Path) -> dict:
         return {"mission": "", "main_line": [], "branch_stack": [], "pointer": 1}
     try:
         from Emerge.agent.tools.update_plan import UpdatePlanTool
-        return UpdatePlanTool._parse(path.read_text(encoding="utf-8"))
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return {"mission": "", "main_line": [], "branch_stack": [], "pointer": 1}
+        return UpdatePlanTool._parse(content)
     except (OSError, ValueError, KeyError) as exc:
         return {"mission": "", "main_line": [], "error": str(exc)}
 

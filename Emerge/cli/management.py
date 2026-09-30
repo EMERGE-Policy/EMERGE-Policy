@@ -1,59 +1,14 @@
 """Configuration and authentication commands; never executes agent turns."""
-import asyncio
+
 import typer
 from rich.console import Console
+
 from Emerge import __logo__
-from Emerge.config.paths import get_workspace_path
-from Emerge.utils.helpers import sync_workspace_templates
 
 app = typer.Typer(help="Configuration and provider management")
 console = Console()
-workspace_app = typer.Typer(help="Initialize and inspect the Emerge workspace")
+workspace_app = typer.Typer(help="Inspect the Emerge workspace")
 app.add_typer(workspace_app, name="workspace")
-
-
-def _initialize_workspace() -> None:
-    """Initialize Emerge configuration, workspace, and bundled templates."""
-    from Emerge.config.loader import get_config_path, load_config, save_config
-    from Emerge.config.schema import Config
-
-    config_path = get_config_path()
-
-    if config_path.exists():
-        console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
-        console.print("  [bold]y[/bold] = overwrite with defaults (existing values will be lost)")
-        console.print("  [bold]N[/bold] = refresh config, keeping existing values and adding new fields")
-        if typer.confirm("Overwrite?"):
-            config = Config()
-            save_config(config)
-            console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
-        else:
-            config = load_config()
-            save_config(config)
-            console.print(f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)")
-    else:
-        config = Config()
-        save_config(config)
-        console.print(f"[green]✓[/green] Created config at {config_path}")
-
-
-    workspace = get_workspace_path()
-    if not workspace.exists():
-        workspace.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]✓[/green] Created workspace at {workspace}")
-    sync_workspace_templates(workspace)
-
-    console.print(f"\n{__logo__} Emerge is ready!")
-    console.print("\nNext steps:")
-    console.print("  1. Add your API key to [cyan]~/.Emerge/config.json[/cyan]")
-    console.print("     Get one at: https://openrouter.ai/keys")
-    console.print("  2. Chat: [cyan]emerge[/cyan]")
-
-
-@workspace_app.command("init")
-def workspace_init() -> None:
-    """Initialize the Emerge configuration and workspace."""
-    _initialize_workspace()
 
 
 def _show_workspace_status() -> None:

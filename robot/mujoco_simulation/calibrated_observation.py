@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
@@ -46,31 +47,42 @@ class CalibratedObservationWriter:
 
         self._revision += 1
         views: list[dict[str, object]] = []
-        for camera in self._cameras:
-            output = camera.get_observation_output()
-            image_path = output.directory / f"{camera.get_name()}.png"
-            image_path.parent.mkdir(parents=True, exist_ok=True)
-            image = cv2.cvtColor(camera.get_rgb(), cv2.COLOR_RGB2BGR)
-            temporary_image = image_path.with_name(
-                f".{image_path.stem}.{os.getpid()}.tmp.png"
-            )
-            if not cv2.imwrite(str(temporary_image), image):
-                raise OSError(f"failed to write camera image: {image_path}")
-            os.replace(temporary_image, image_path)
-            views.append(
-                {
-                    "name": camera.get_name(),
-                    "image_path": image_path.relative_to(
-                        self._workspace
-                    ).as_posix(),
-                    "width": camera.get_width(),
-                    "height": camera.get_height(),
-                    "intrinsics": camera.get_intrinsics().astype(float).tolist(),
-                    "T_world_camera": (
-                        camera.get_world_camera_transform().astype(float).tolist()
-                    ),
-                }
-            )
+        # Rendered camera data is read on the simulation thread. Only PNG encoding
+        # and file writes run in parallel; publish the manifest after all finish.
+        with ThreadPoolExecutor(max_workers=min(4, len(self._cameras))) as pool:
+            writes = []
+            for camera in self._cameras:
+                output = camera.get_observation_output()
+                image_path = output.directory / f"{camera.get_name()}.png"
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                image = cv2.cvtColor(camera.get_rgb(), cv2.COLOR_RGB2BGR)
+                temporary_image = image_path.with_name(
+                    f".{image_path.stem}.{os.getpid()}.tmp.png"
+                )
+                writes.append((
+                    pool.submit(cv2.imwrite, str(temporary_image), image),
+                    temporary_image,
+                    image_path,
+                ))
+                views.append(
+                    {
+                        "name": camera.get_name(),
+                        "image_path": image_path.relative_to(
+                            self._workspace
+                        ).as_posix(),
+                        "width": camera.get_width(),
+                        "height": camera.get_height(),
+                        "intrinsics": camera.get_intrinsics().astype(float).tolist(),
+                        "T_world_camera": (
+                            camera.get_world_camera_transform().astype(float).tolist()
+                        ),
+                    }
+                )
+
+            for future, temporary_image, image_path in writes:
+                if not future.result():
+                    raise OSError(f"failed to write camera image: {image_path}")
+                os.replace(temporary_image, image_path)
 
         manifest = {
             "revision": self._revision,
