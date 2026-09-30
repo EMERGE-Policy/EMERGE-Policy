@@ -202,7 +202,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gateway-port", type=int, default=DEFAULT_GATEWAY_PORT)
     parser.add_argument("--startup-timeout", type=float, default=600.0)
-    parser.add_argument("--episode-timeout", type=float, default=1800.0)
+    parser.add_argument(
+        "--episode-timeout",
+        type=float,
+        default=1800.0,
+        help=(
+            "Wall-clock seconds available to the complete episode after the Agent starts, "
+            "including reasoning and robot actions. Independent of --max-steps."
+        ),
+    )
     parser.add_argument("--poll-interval", type=float, default=0.2)
     parser.add_argument(
         "--state-sync-timeout",
@@ -749,20 +757,25 @@ def _resume_decision(
 ) -> str:
     """Decide what to do after the Agent process exits.
 
-    Returns ``infrastructure``, ``stop``, ``exhausted``, ``blocked`` or
-    ``resume``. Like the native LIBERO runner, feedback is allowed only after a
-    clean Agent exit while the evaluator remains unfinished. Resuming is safe
-    only when no action is still in flight.
+    Returns ``infrastructure``, ``stop``, ``exhausted``, ``blocked``,
+    ``resume_checkpoint`` or ``resume_feedback``. ``max_iterations`` is an
+    internal Agent-segment boundary for long BEHAVIOR episodes, while a clean
+    response uses the bounded evaluator-feedback path. Either continuation is
+    safe only when no action is still in flight.
     """
     if finish_reason in INFRASTRUCTURE_FINISH_REASONS:
         return "infrastructure"
-    if returncode != 0 or status.get("success") or status.get("done"):
+    if status.get("success") or status.get("done"):
+        return "stop"
+    if finish_reason == "max_iterations":
+        return "resume_checkpoint" if actions_settled else "blocked"
+    if returncode != 0:
         return "stop"
     if feedback_rounds >= max_rounds:
         return "exhausted"
     if not actions_settled:
         return "blocked"
-    return "resume"
+    return "resume_feedback"
 
 
 # --------------------------------------------------------------------------- #
@@ -833,6 +846,7 @@ def main() -> int:
     processes: list = []
     agent_results: list[dict[str, Any]] = []
     feedback_rounds = 0
+    max_iteration_restarts = 0
     termination_reason = "unknown"
     infrastructure_error: str | None = None
     evaluator_code: int | None = None
@@ -961,9 +975,16 @@ def main() -> int:
                         infrastructure_error = "agent_resume_blocked_by_active_action"
                         termination_reason = infrastructure_error
                         break
-                    feedback_rounds += 1
+                    if decision == "resume_checkpoint":
+                        max_iteration_restarts += 1
+                        continuation_label = (
+                            f"max-iteration checkpoint {max_iteration_restarts}"
+                        )
+                    else:
+                        feedback_rounds += 1
+                        continuation_label = f"feedback round {feedback_rounds}"
                     agent_log.write(
-                        f"\n=== feedback round {feedback_rounds}: resuming after "
+                        f"\n=== {continuation_label}: resuming same session after "
                         f"{finish_reason} ===\n".encode()
                     )
                     agent_log.flush()
@@ -1020,6 +1041,7 @@ def main() -> int:
         "evaluator_returncode": evaluator_code,
         "evaluator_status": status,
         "agent_feedback_rounds": feedback_rounds,
+        "agent_max_iteration_restarts": max_iteration_restarts,
         "agent_results": agent_results,
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),

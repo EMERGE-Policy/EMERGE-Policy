@@ -128,11 +128,18 @@ The Agent uses EMERGE's native `~/.Emerge/config.json` provider configuration.
 Pass `--config /path/to/config.json` only when an episode needs a different
 configuration.
 
-Feedback continuation follows the native LIBERO runner: the same session is
-continued only after a clean Agent response while the official evaluator still
-reports an unfinished episode. Runtime failures such as `max_iterations`,
-context `length`, provider errors, or timeouts are not converted into a fresh
-Agent run.
+Feedback after a clean Agent response follows the native LIBERO runner and is
+bounded by `--max-agent-feedback-rounds`. BEHAVIOR episodes are substantially
+longer, so the native 40-iteration Agent limit is treated as an internal
+checkpoint: `max_iterations` starts another run in the same session without
+consuming a feedback round. Session history and workspace state are preserved.
+Provider failures, context `length`, and timeouts still stop the episode.
+
+`--episode-timeout` is the wall-clock safety limit for the complete BEHAVIOR
+episode after the Agent starts; its default is 1800 seconds. It includes LLM
+thinking and physical actions and is independent of BEHAVIOR's official
+simulator-step limit. The native LIBERO runner has the same kind of limit with
+a 900-second default.
 
 `--config` has the same meaning as the native `Emerge agent --config` option;
 `--agent-config` remains an alias for older evaluation commands. The base

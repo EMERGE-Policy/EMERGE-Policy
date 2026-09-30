@@ -560,10 +560,15 @@ class ResumeDecisionTest(unittest.TestCase):
         )
 
     def test_clean_agent_stop_resumes_the_same_session(self) -> None:
-        self.assertEqual(self._decide("stop"), "resume")
+        self.assertEqual(self._decide("stop"), "resume_feedback")
 
-    def test_failed_iteration_or_context_limit_does_not_resume(self) -> None:
-        self.assertEqual(self._decide("max_iterations", returncode=1), "stop")
+    def test_max_iterations_is_a_same_session_checkpoint(self) -> None:
+        self.assertEqual(
+            self._decide("max_iterations", returncode=1),
+            "resume_checkpoint",
+        )
+
+    def test_context_limit_does_not_resume(self) -> None:
         self.assertEqual(self._decide("length", returncode=1), "stop")
 
     def test_unconfirmed_cancellation_never_resumes(self) -> None:
@@ -578,9 +583,17 @@ class ResumeDecisionTest(unittest.TestCase):
 
     def test_round_limit_is_reported_separately(self) -> None:
         self.assertEqual(self._decide("stop", rounds=2, maximum=2), "exhausted")
+        self.assertEqual(
+            self._decide("max_iterations", returncode=1, rounds=2, maximum=2),
+            "resume_checkpoint",
+        )
 
     def test_an_unsettled_action_blocks_the_resume(self) -> None:
         self.assertEqual(self._decide("stop", settled=False), "blocked")
+        self.assertEqual(
+            self._decide("max_iterations", returncode=1, settled=False),
+            "blocked",
+        )
 
     def test_finished_official_episode_does_not_resume(self) -> None:
         self.assertEqual(
