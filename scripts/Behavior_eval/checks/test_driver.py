@@ -33,6 +33,8 @@ class _FakeGateway:
             "requests_forwarded": 0,
             "evaluator_connected": True,
             "upstream_connected": True,
+            "control_mode": "navigation",
+            "base_motion_enabled": True,
             **state,
         }
         # A dispatched execution reaches a terminal state rather than hanging.
@@ -77,6 +79,15 @@ class _FakeGateway:
 
     def snapshot(self) -> dict[str, Any]:
         return {**self.state, "execution": self.execution}
+
+    def set_control_mode(self, mode: str) -> bool:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"navigation", "manipulation"}:
+            raise ValueError("control mode must be one of: manipulation, navigation")
+        changed = normalized != self.state["control_mode"]
+        self.state["control_mode"] = normalized
+        self.state["base_motion_enabled"] = normalized == "navigation"
+        return changed
 
     def begin_execution(
         self, instruction: str, requested_steps: int, *, baseline_evaluator_steps=None
@@ -212,6 +223,32 @@ class BehaviorDriverContractTest(unittest.TestCase):
 
     def test_unknown_action_type_is_reported(self) -> None:
         self.assertIn("Unknown action type", self.driver.execute_action("follow_arc", {}))
+
+    def test_set_control_mode_locks_and_unlocks_the_base(self) -> None:
+        locked = self.driver.execute_action(
+            "set_control_mode", {"mode": "manipulation"}
+        )
+        self.assertIn("base motion is locked", locked)
+        self.assertEqual(self.gateway.state["control_mode"], "manipulation")
+        self.assertFalse(self.gateway.state["base_motion_enabled"])
+
+        unlocked = self.driver.execute_action(
+            "set_control_mode", {"mode": "navigation"}
+        )
+        self.assertIn("base motion is enabled", unlocked)
+        self.assertTrue(self.gateway.state["base_motion_enabled"])
+
+    def test_set_control_mode_rejects_invalid_parameters(self) -> None:
+        for params in (None, {}, {"mode": "unsafe"}, {"mode": "navigation", "step": 1}):
+            with self.subTest(params=params):
+                result = self.driver.execute_action("set_control_mode", params)
+                self.assertTrue(result.startswith("Failed:"), result)
+
+    def test_runtime_state_exposes_the_control_boundary(self) -> None:
+        self.driver.execute_action("set_control_mode", {"mode": "manipulation"})
+        robot = self.driver.get_runtime_state()["robots"]["behavior_r1pro"]
+        self.assertEqual(robot["control_mode"], "manipulation")
+        self.assertFalse(robot["base_motion_enabled"])
 
     def test_hold_position_uses_the_gateway_local_action(self) -> None:
         result = self.driver.execute_action("hold_position", {"step": 2})

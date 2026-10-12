@@ -1,7 +1,9 @@
 """Websocket gateway between BEHAVIOR and the OpenPI B1K server.
 
-Wire payloads are always forwarded unchanged.  An optional observation
-publisher decodes a side copy for EMERGE's visual tools.
+Observation payloads are forwarded unchanged. An optional observation
+publisher decodes a side copy for EMERGE's visual tools. In base-locked
+manipulation mode, only the first three dimensions of OpenPI action replies
+are zeroed before they reach the evaluator.
 
 The gateway is also the execution gate: in controlled mode it only lets a
 bounded number of policy actions reach the evaluator, and it reports back what
@@ -50,6 +52,11 @@ TERMINAL_EXECUTION_STATES = frozenset(
     {STEP_COMPLETED, INTERRUPTED, EPISODE_FINISHED, EPISODE_RESET, ERROR, TIMEOUT, NO_PROGRESS}
 )
 
+NAVIGATION_CONTROL_MODE = "navigation"
+MANIPULATION_CONTROL_MODE = "manipulation"
+CONTROL_MODES = frozenset({NAVIGATION_CONTROL_MODE, MANIPULATION_CONTROL_MODE})
+R1PRO_BASE_ACTION_DIM = 3
+
 
 @dataclass
 class GatewayStats:
@@ -97,7 +104,7 @@ class ExecutionState:
 
 
 class B1KProxyGateway:
-    """Relay the official BEHAVIOR websocket protocol without modifying it."""
+    """Relay the official BEHAVIOR websocket protocol with controlled action gating."""
 
     def __init__(
         self,
@@ -143,6 +150,7 @@ class B1KProxyGateway:
         self._evaluator_connected = False
         self._upstream_connected = False
         self._upstream_needs_reset = False
+        self._control_mode = NAVIGATION_CONTROL_MODE
         self._stopped_cleanly = True
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -178,6 +186,8 @@ class B1KProxyGateway:
                     "evaluator_connected": self._evaluator_connected,
                     "upstream_connected": self._upstream_connected,
                     "upstream_needs_reset": self._upstream_needs_reset,
+                    "control_mode": self._control_mode,
+                    "base_motion_enabled": self._control_mode == NAVIGATION_CONTROL_MODE,
                     "stopped_cleanly": self._stopped_cleanly,
                     "execution": asdict(self._execution) if self._execution else None,
                 }
@@ -197,6 +207,31 @@ class B1KProxyGateway:
     # ------------------------------------------------------------------ #
     # Execution control
     # ------------------------------------------------------------------ #
+
+    def set_control_mode(self, mode: str) -> bool:
+        """Switch between whole-body navigation and base-locked manipulation.
+
+        A transition is only legal between robot actions. Returning true means
+        the mode changed. OpenPI is reset before its next request so it replans
+        from the current observation under the new control boundary.
+        """
+        if not self.controlled:
+            raise RuntimeError("Control mode is available only on a controlled gateway")
+        normalized = str(mode).strip().lower()
+        if normalized not in CONTROL_MODES:
+            expected = ", ".join(sorted(CONTROL_MODES))
+            raise ValueError(f"control mode must be one of: {expected}")
+        with self._execution_condition:
+            if self._execution is not None and self._execution.status == EXECUTING:
+                raise RuntimeError(
+                    "control mode cannot change while a robot action is executing"
+                )
+            if normalized == self._control_mode:
+                return False
+            self._control_mode = normalized
+            self._upstream_needs_reset = True
+            self._execution_condition.notify_all()
+            return True
 
     def begin_execution(
         self,
@@ -654,6 +689,8 @@ class B1KProxyGateway:
                         await destination.send(_pack_reset_request())
                         with self._stats_lock:
                             self._stats.upstream_resets_sent += 1
+                if not request_direction and self._base_motion_is_locked():
+                    message = _zero_r1pro_base_action(message)
                 await destination.send(message)
                 with self._stats_lock:
                     if request_direction:
@@ -745,6 +782,7 @@ class B1KProxyGateway:
     def _record_reset(self) -> None:
         with self._execution_condition:
             self._episode_id += 1
+            self._control_mode = NAVIGATION_CONTROL_MODE
             # This same evaluator reset message is forwarded to OpenPI.
             self._upstream_needs_reset = False
             execution = self._execution
@@ -767,6 +805,10 @@ class B1KProxyGateway:
             self._upstream_needs_reset = False
             self._execution_condition.notify_all()
             return True
+
+    def _base_motion_is_locked(self) -> bool:
+        with self._execution_condition:
+            return self._control_mode == MANIPULATION_CONTROL_MODE
 
     # ------------------------------------------------------------------ #
     # Retirement bookkeeping
@@ -822,6 +864,82 @@ def _is_reset_message(message: Any) -> bool:
     return isinstance(payload, dict) and payload.get("reset") is True
 
 
+def _unpack_numpy_array(item: dict[Any, Any]) -> Any:
+    import numpy as np
+
+    if item.get(b"__ndarray__", item.get("__ndarray__")):
+        data = item.get(b"data", item.get("data"))
+        dtype = item.get(b"dtype", item.get("dtype"))
+        shape = item.get(b"shape", item.get("shape"))
+        return np.ndarray(buffer=data, dtype=np.dtype(dtype), shape=tuple(shape))
+    if item.get(b"__npgeneric__", item.get("__npgeneric__")):
+        data = item.get(b"data", item.get("data"))
+        dtype = item.get(b"dtype", item.get("dtype"))
+        return np.dtype(dtype).type(data)
+    return item
+
+
+def _pack_numpy_array(value: Any) -> dict[bytes, Any]:
+    import numpy as np
+
+    if isinstance(value, np.ndarray):
+        return {
+            b"__ndarray__": True,
+            b"data": value.tobytes(),
+            b"dtype": value.dtype.str,
+            b"shape": value.shape,
+        }
+    if isinstance(value, np.generic):
+        return {
+            b"__npgeneric__": True,
+            b"data": value.item(),
+            b"dtype": value.dtype.str,
+        }
+    raise TypeError(f"cannot pack {type(value).__name__}")
+
+
+def _zero_r1pro_base_action(message: Any) -> Any:
+    """Return an OpenPI response with only the R1Pro base command zeroed."""
+    if not isinstance(message, (bytes, bytearray, memoryview)):
+        raise RuntimeError("OpenPI action response must be a binary msgpack payload")
+
+    import msgpack
+    import numpy as np
+
+    try:
+        payload = msgpack.unpackb(
+            message,
+            raw=False,
+            object_hook=_unpack_numpy_array,
+        )
+    except Exception as exc:
+        raise RuntimeError("cannot decode OpenPI action response for base locking") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("OpenPI action response must be a mapping")
+
+    action_keys = [
+        key
+        for key in ("action", "actions", "action_chunk")
+        if key in payload
+    ]
+    if not action_keys:
+        raise RuntimeError("OpenPI action response has no action payload to base-lock")
+
+    for key in action_keys:
+        original = payload[key]
+        action = np.asarray(original)
+        if action.ndim < 1 or action.shape[-1] != 23:
+            raise RuntimeError(
+                f"OpenPI {key} must end in the official 23-D R1Pro action, "
+                f"got shape {action.shape}"
+            )
+        masked = np.array(action, copy=True)
+        masked[..., :R1PRO_BASE_ACTION_DIM] = 0
+        payload[key] = masked if isinstance(original, np.ndarray) else masked.tolist()
+
+    return msgpack.packb(payload, default=_pack_numpy_array)
+
+
 def _pack_action_response(action: list[float] | None) -> bytes:
     if action is None:
         raise RuntimeError("local execution has no action payload")
@@ -829,18 +947,7 @@ def _pack_action_response(action: list[float] | None) -> bytes:
     import numpy as np
 
     array = np.asarray(action, dtype=np.float32)[None, :]
-
-    def pack_array(value: Any) -> dict[bytes, Any]:
-        if isinstance(value, np.ndarray):
-            return {
-                b"__ndarray__": True,
-                b"data": value.tobytes(),
-                b"dtype": value.dtype.str,
-                b"shape": value.shape,
-            }
-        raise TypeError(f"cannot pack {type(value).__name__}")
-
-    return msgpack.packb({"action": array}, default=pack_array)
+    return msgpack.packb({"action": array}, default=_pack_numpy_array)
 
 
 def _pack_reset_request() -> bytes:

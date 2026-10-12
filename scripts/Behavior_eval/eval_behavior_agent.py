@@ -96,6 +96,12 @@ You control one R1Pro episode for `turning_on_radio` through the
 - `step` is an action budget and must not exceed
   `robots.behavior_r1pro.max_action_steps` in `ROBOT_STATE.md`.
 - Use bounded chunks and inspect `ROBOT_STATE.md` after every action.
+- Start approach in `navigation` mode. When the visual monitor verifies that
+  the target is in bimanual reach and no further base translation is needed,
+  call `set_control_mode` with `{{"mode": "manipulation"}}` before the next
+  contact or VLA action. Confirm `base_motion_enabled == false`; this keeps
+  π0.5 control of the trunk, arms, and grippers while forcing base velocity to
+  zero.
 - The authoritative completion signal is
   `robots.behavior_r1pro.evaluation.success` together with
   `robots.behavior_r1pro.evaluation.phase == "completed"`.
@@ -433,6 +439,7 @@ def _evaluator_command(
     instance_index: int,
     max_steps: int,
     output_dir: Path,
+    workspace: Path,
     write_video: bool,
     headless: bool,
 ) -> list[str]:
@@ -463,6 +470,10 @@ def _evaluator_command(
         BEHAVIOR_RGBD_WRAPPER,
         "--output-dir",
         str(output_dir),
+        "--verification-observation-workspace",
+        str(workspace),
+        "--verification-publish-interval",
+        "5",
         "--write-video" if write_video else "--no-write-video",
         "--headless" if headless else "--no-headless",
     ]
@@ -894,6 +905,7 @@ def main() -> int:
                 instance_index=args.instance_index,
                 max_steps=args.max_steps,
                 output_dir=output_dir,
+                workspace=workspace,
                 write_video=args.write_video,
                 headless=args.headless,
             )

@@ -248,6 +248,25 @@ class ControllerQueueIntegrationTest(unittest.TestCase):
 
     # -- tests ---------------------------------------------------------- #
 
+    def test_control_mode_action_reaches_driver_and_updates_robot_state(self) -> None:
+        document = update_action_document(
+            self.action_file,
+            lambda current: append_action(
+                current,
+                action_type="set_control_mode",
+                parameters={"mode": "manipulation"},
+            ),
+        )
+        action_id = str(document["actions"][-1]["id"])
+
+        _poll_once(self.driver, self.action_file, self.state_file)
+
+        action = self._find(action_id)
+        self.assertEqual(action["status"], "completed", action)
+        robot = robot_state_section(self.workspace)
+        self.assertEqual(robot["control_mode"], "manipulation")
+        self.assertFalse(robot["base_motion_enabled"])
+
     def test_action_completes_and_publishes_synchronized_state(self) -> None:
         self._start_evaluator(finish_after=None)
         action_id = self._enqueue(steps=2)

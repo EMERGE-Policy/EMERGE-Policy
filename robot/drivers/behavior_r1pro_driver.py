@@ -160,7 +160,9 @@ class BehaviorR1ProDriver(BaseDriver):
             return (
                 "Gateway status: "
                 f"{state['status']}, active_connections={state['active_connections']}, "
-                f"requests_forwarded={state['requests_forwarded']}."
+                f"requests_forwarded={state['requests_forwarded']}, "
+                f"control_mode={state['control_mode']}, "
+                f"base_motion_enabled={state['base_motion_enabled']}."
             )
         supported = {
             "vla_execute",
@@ -168,9 +170,42 @@ class BehaviorR1ProDriver(BaseDriver):
             "move_to_pose",
             "move_linear",
             "set_gripper",
+            "set_control_mode",
         }
         if action_type not in supported:
             return f"Unknown action type: {action_type!r}."
+
+        if action_type == "set_control_mode":
+            if not isinstance(params, dict):
+                return f"{contracts.FAILED_PREFIX} set_control_mode parameters must be an object"
+            unknown = sorted(set(params) - {"mode"})
+            if unknown:
+                return (
+                    f"{contracts.FAILED_PREFIX} set_control_mode received unknown parameters: "
+                    + ", ".join(unknown)
+                )
+            mode = params.get("mode")
+            if not isinstance(mode, str) or not mode.strip():
+                return (
+                    f"{contracts.FAILED_PREFIX} set_control_mode requires a non-empty mode"
+                )
+            try:
+                changed = self._gateway.set_control_mode(mode)
+            except (RuntimeError, ValueError) as exc:
+                return f"{contracts.FAILED_PREFIX} {exc}"
+            state = self._gateway.snapshot()
+            current = state["control_mode"]
+            base = "enabled" if state["base_motion_enabled"] else "locked"
+            transition = "changed" if changed else "already active"
+            reset_note = (
+                "OpenPI will replan before the next VLA action."
+                if changed
+                else "The control boundary is unchanged."
+            )
+            return (
+                f"Control mode {transition}: {current}; base motion is {base}. "
+                f"{reset_note}"
+            )
 
         try:
             if action_type == "vla_execute":

@@ -216,8 +216,10 @@ It selects BEHAVIOR's stock `RGBDFullResWrapper`: π0.5 continues to consume the
 three RGB keys and resizes them internally to 224x224, while EMERGE saves the
 aligned metre-valued `depth_linear` arrays as a read-only side copy. The raw
 websocket message forwarded to OpenPI is unchanged.
-It does not require patches or additional files in the BEHAVIOR repository.
-The checked-in `dev/behavior_r1pro_openpi.yaml` copies the official v3.9.3 R1Pro
+The companion evaluator changes in the BEHAVIOR repository publish the optional
+verification-camera side channel; the official policy observation and scoring
+paths remain unchanged. The checked-in `dev/behavior_r1pro_openpi.yaml` copies
+the official v3.9.3 R1Pro
 settings but names the runtime robot `robot`, because the public OpenPI wrapper
 was trained against `robot::proprio` and `robot::robot:...` observation keys.
 
@@ -235,6 +237,31 @@ reviews the returned overlays, and only then requests three-dimensional
 localization. `locate_candidates` reuses the cached masks. BEHAVIOR replaces
 the original VGGT geometry stage with its calibrated `depth_linear` arrays;
 the Agent/SAM3 delegation contract remains unchanged.
+
+## Camera roles
+
+Object localization keeps the original robot camera contract: head, left wrist,
+and right wrist RGB-D, with calibrated depth and camera geometry. Those inputs
+are also the only camera inputs forwarded to π0.5.
+
+Task verification reads a separate RGB-only manifest published by the BEHAVIOR
+evaluator. Its ordered views are `room_overview`, `table_overhead`,
+`table_side`, and the original robot `head` camera. The fixed observer
+cameras provide evidence about navigation, collisions, bimanual manipulation,
+object orientation, contact, and lift; the head view provides the robot
+first-person evidence. This verification side channel does not replace the
+RGB-D localization manifest and does not alter the OpenPI websocket payload.
+
+## Navigation-to-manipulation handoff
+
+The R1Pro driver starts each episode in `navigation` mode, where π0.5 controls
+the full official 23-D action. Once the visual monitor confirms that the target
+is in bimanual reach and no more base translation is needed, the Agent calls
+`set_control_mode` with `{"mode": "manipulation"}`. The gateway then sets
+only the base x/y/yaw entries to zero while forwarding π0.5's trunk, arm, and
+gripper outputs. The active mode and `base_motion_enabled` flag are visible in
+`ROBOT_STATE.md`. A new evaluator episode automatically resets the mode to
+`navigation`.
 
 ## Current limits
 

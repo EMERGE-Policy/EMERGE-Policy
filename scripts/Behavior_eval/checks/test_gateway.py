@@ -15,7 +15,10 @@ import msgpack
 import numpy as np
 from PIL import Image
 
-from robot.behavior.gateway import B1KProxyGateway
+from robot.behavior.gateway import (
+    B1KProxyGateway,
+    _zero_r1pro_base_action,
+)
 from robot.behavior.observation import ObservationPublisher
 
 
@@ -343,6 +346,65 @@ def _unpack_array(value):
     return value
 
 
+class BaseLockedActionTest(unittest.TestCase):
+    def test_wire_payload_zeros_only_base_for_single_action_and_chunk(self) -> None:
+        action = np.arange(23, dtype=np.float32)[None, :]
+        chunk = np.arange(46, dtype=np.float32).reshape(2, 23)
+        message = msgpack.packb(
+            {"action": action, "action_chunk": chunk, "metadata": "preserved"},
+            default=_pack_array,
+        )
+
+        masked = msgpack.unpackb(
+            _zero_r1pro_base_action(message),
+            raw=False,
+            object_hook=_unpack_array,
+        )
+
+        np.testing.assert_allclose(masked["action"][..., :3], 0)
+        np.testing.assert_allclose(masked["action"][..., 3:], action[..., 3:])
+        np.testing.assert_allclose(masked["action_chunk"][..., :3], 0)
+        np.testing.assert_allclose(masked["action_chunk"][..., 3:], chunk[..., 3:])
+        self.assertEqual(masked["metadata"], "preserved")
+
+    def test_invalid_action_shape_fails_closed(self) -> None:
+        message = msgpack.packb(
+            {"action": np.ones((1, 22), dtype=np.float32)},
+            default=_pack_array,
+        )
+        with self.assertRaisesRegex(RuntimeError, "23-D"):
+            _zero_r1pro_base_action(message)
+
+
+class ControlModeStateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.gateway = B1KProxyGateway(controlled=True)
+
+    def test_mode_change_is_between_actions_and_resets_policy(self) -> None:
+        state = self.gateway.snapshot()
+        self.assertEqual(state["control_mode"], "navigation")
+        self.assertTrue(state["base_motion_enabled"])
+
+        self.assertTrue(self.gateway.set_control_mode("manipulation"))
+        state = self.gateway.snapshot()
+        self.assertEqual(state["control_mode"], "manipulation")
+        self.assertFalse(state["base_motion_enabled"])
+        self.assertTrue(state["upstream_needs_reset"])
+
+        execution_id = self.gateway.begin_execution("test", 2)
+        with self.assertRaisesRegex(RuntimeError, "while a robot action is executing"):
+            self.gateway.set_control_mode("navigation")
+        self.gateway.cancel_execution(execution_id, "test complete")
+        self.assertTrue(self.gateway.set_control_mode("navigation"))
+
+    def test_evaluator_reset_restores_navigation(self) -> None:
+        self.gateway.set_control_mode("manipulation")
+        self.gateway._record_reset()
+        state = self.gateway.snapshot()
+        self.assertEqual(state["control_mode"], "navigation")
+        self.assertTrue(state["base_motion_enabled"])
+
+
 class _ControllableOpenPIServer:
     """Fake OpenPI server whose replies are released by the test on demand."""
 
@@ -442,6 +504,38 @@ class ControlledExecutionOwnershipTest(unittest.TestCase):
             compression=None,
             max_size=None,
         )
+
+    def test_manipulation_mode_masks_base_on_relayed_openpi_action(self) -> None:
+        from websockets.sync.client import connect
+
+        self.gateway.set_control_mode("manipulation")
+        execution_id = self.gateway.begin_execution("turn on the radio", 1)
+        action = np.arange(23, dtype=np.float32)[None, :]
+        response = msgpack.packb({"action": action}, default=_pack_array)
+
+        with connect(
+            f"ws://127.0.0.1:{self.gateway.listen_port}",
+            compression=None,
+            max_size=None,
+        ) as client:
+            self.assertEqual(client.recv(), b"openpi-metadata")
+            client.send(b"observation")
+            self.upstream.wait_for_requests(2)
+            self.assertEqual(
+                msgpack.unpackb(self.upstream.received[0], raw=False),
+                {"reset": True},
+            )
+            self.upstream.send(response)
+            masked = msgpack.unpackb(
+                client.recv(timeout=2),
+                raw=False,
+                object_hook=_unpack_array,
+            )
+
+        result = self.gateway.wait_for_execution(execution_id, progress_timeout_s=2)
+        np.testing.assert_allclose(masked["action"][0, :3], 0)
+        np.testing.assert_allclose(masked["action"][0, 3:], action[0, 3:])
+        self.assertEqual(result["status"], "step_completed")
 
     def test_late_reply_from_a_cancelled_execution_is_not_credited_to_the_next_one(self) -> None:
         execution_a = self.gateway.begin_execution("turn on the radio", 5)

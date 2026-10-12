@@ -68,7 +68,8 @@ class EmbodiedActionTool(Tool):
                         "- 'set_gripper': Set gripper opening (open/close command or specific width in meters)\n"
                         "- 'follow_arc': Move end-effector along an arc (circular motion)\n"
                         "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy\n"
-                        "- 'hold_position': Repeat current joints with zero base velocity when the active embodiment supports it"
+                        "- 'hold_position': Repeat current joints with zero base velocity when the active embodiment supports it\n"
+                        "- 'set_control_mode': Select an embodiment control boundary such as navigation or base-locked manipulation"
                     ),
                 },
                 "parameters": {
@@ -84,6 +85,7 @@ class EmbodiedActionTool(Tool):
                         "- set_gripper: {opening_m: 0.08} or {command: 'open'} or {command: 'close'}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
+                        "- set_control_mode: {mode: 'navigation'} or {mode: 'manipulation'}\n"
                         "For move_to_pose, provide the target form required by the active embodiment profile; orientation requirements are also embodiment-specific. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
                         "For follow_arc, ALWAYS provide center, axis, radius_m, and one of angle_deg or angle_rad. "

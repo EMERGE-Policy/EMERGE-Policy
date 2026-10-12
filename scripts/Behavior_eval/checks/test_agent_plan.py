@@ -44,6 +44,7 @@ class BehaviorAgentPlanTest(unittest.TestCase):
             "move_linear",
             "set_gripper",
             "hold_position",
+            "set_control_mode",
         ):
             with self.subTest(action=action):
                 self.assertIn(f"`{action}`", profile)
@@ -59,6 +60,8 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         self.assertIn("object_location", EVALUATION_INSTRUCTIONS)
         self.assertIn("move_to_pose", EVALUATION_INSTRUCTIONS)
         self.assertIn("task execution contract", EVALUATION_INSTRUCTIONS)
+        self.assertIn("set_control_mode", EVALUATION_INSTRUCTIONS)
+        self.assertIn("base_motion_enabled == false", EVALUATION_INSTRUCTIONS)
         self.assertNotIn("Follow the phased route", EVALUATION_INSTRUCTIONS)
         initial = _agent_message(6002)
         feedback = _feedback_message({"success": False}, 6002)
@@ -81,6 +84,8 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         normalized = " ".join(guidance.split())
         self.assertIn("do not localize or press the button", normalized)
         self.assertIn("changes from red to green", normalized)
+        self.assertIn("four verification views", normalized)
+        self.assertIn('{"mode": "manipulation"}', normalized)
 
     def test_generic_vla_defers_fixed_prompt_semantics_to_the_embodiment(self) -> None:
         skill = GENERIC_VLA.read_text(encoding="utf-8")

@@ -353,6 +353,7 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             instance_index=3,
             max_steps=6000,
             output_dir=Path("/tmp/episode"),
+            workspace=Path("/tmp/episode/workspace"),
             write_video=True,
             headless=False,
         )
@@ -364,6 +365,14 @@ class NativeDriverConfigurationTest(unittest.TestCase):
         self.assertIn("/checkout/OmniGibson/omnigibson/eval/r1pro.yaml", command)
         self.assertIn("--write-video", command)
         self.assertIn("--no-headless", command)
+        self.assertEqual(
+            command[command.index("--verification-observation-workspace") + 1],
+            "/tmp/episode/workspace",
+        )
+        self.assertEqual(
+            command[command.index("--verification-publish-interval") + 1],
+            "5",
+        )
         self.assertEqual(
             command[command.index("--env-wrapper") + 1],
             "omnigibson.eval.wrappers.RGBDFullResWrapper",

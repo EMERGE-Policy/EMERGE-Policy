@@ -95,6 +95,29 @@ This repeats current joint and gripper positions with zero base velocity. Use
 it only for synchronization or diagnosis. Reasoning itself does not require a
 hold because the simulator is paused between actions.
 
+### `set_control_mode`
+
+The episode starts in whole-body `navigation` mode:
+
+```json
+{"mode": "navigation"}
+```
+
+After the visual verifier confirms that the target is in manipulation range
+and no further base translation is needed, switch at the action boundary:
+
+```json
+{"mode": "manipulation"}
+```
+
+In `manipulation` mode the gateway forces the first three entries of every
+official 23-D π0.5 action (base x/y/yaw velocity) to zero. Trunk, both arms,
+and both grippers remain controlled by π0.5. The transition resets OpenPI so
+the next VLA call replans from the current observation. Check
+`control_mode` and `base_motion_enabled` in `ROBOT_STATE.md` before
+contact. Return to `navigation` only when fresh verification shows that the
+target is outside manipulation range and base repositioning is required.
+
 `gateway_status` is read-only. `attach` is a generic EMERGE skill that composes
 the supported `move_to_pose`, `move_linear`, and `set_gripper` actions; it is
 not a separate driver action. `follow_arc` and `navigate_vln` are not

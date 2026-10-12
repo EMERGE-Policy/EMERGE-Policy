@@ -11,8 +11,14 @@ each phase.
    the radio's initial pose.
 2. **Approach the radio body.** Use the measured radio geometry for a safe
    pre-grasp approach. The target of this phase is the radio body, not a knob,
-   dial, or button.
-3. **Grasp and reorient the radio.** Use both arms as needed. One arm must
+   dial, or button. Define the plan's done criterion as: the whole radio is
+   within bimanual reach, the robot and table are stable, and no further base
+   translation is needed. Let the visual monitor verify that condition from
+   the four verification views and interrupt the approach VLA chunk.
+3. **Grasp and reorient the radio.** After the approach criterion is visibly
+   verified, call `set_control_mode` with `{"mode": "manipulation"}` before
+   any contact action, and confirm that `base_motion_enabled` is false. Use
+   both arms as needed. One arm must
    secure and lift the radio, then turn it so the face containing the red power
    button is visibly facing upward. Use the other arm to stabilize the object
    when required. A hand merely touching the radio does not complete this

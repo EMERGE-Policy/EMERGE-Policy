@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import concurrent.futures
 import json
 import queue
@@ -22,6 +21,7 @@ from Emerge.subagents import ImageContent, SubagentTask, TextContent
 from Emerge.subagents.context import SubagentContextBuilder
 from Emerge.subagents.skills import SkillRegistry
 from Emerge.subagents.task_verification.tools import SubmitVerificationTool
+from Emerge.subagents.task_verification.tools.observation import ObservationStore
 from Emerge.utils.action_queue import (
     first_active_action,
     normalize_action_document,
@@ -31,10 +31,12 @@ from Emerge.utils.action_queue import (
 
 _VISUAL_MONITOR_PROMPT = """
 You are a fast visual interrupt monitor for an embodied agent. The task includes
-one current reference-camera image. Decide whether the stated plan subgoal and
-its full done criterion are visibly achieved, then call
+one or more named current camera images. Inspect every supplied view and decide
+whether the stated plan subgoal and its full done criterion are visibly
+achieved, then call
 `submit_task_verification` exactly once. Use only visible evidence and mark a
-condition uncertain when this image cannot prove it. Do not plan robot motion
+condition uncertain when the supplied views cannot prove it. Do not plan robot
+motion
 or call any other tool.
 """.strip()
 
@@ -99,6 +101,7 @@ class VisualMonitor:
         ] = queue.Queue()
         self._verification_task: asyncio.Task | None = None
         self._submission_tool = SubmitVerificationTool()
+        self._observation_store = ObservationStore(workspace)
         self._tools = ToolRegistry()
         self._tools.register(self._submission_tool)
         self._context_builder = SubagentContextBuilder(
@@ -210,7 +213,7 @@ class VisualMonitor:
     def _poll_once(self) -> None:
         plan_file = self.workspace / "PLAN.md"
         action_file = self.workspace / "ACTION.md"
-        observation_file = self.workspace / "artifacts/observations/observation.json"
+        observation_file = self._observation_store.manifest_path
         if not plan_file.exists() or not action_file.exists() or not observation_file.exists():
             return
 
@@ -219,9 +222,10 @@ class VisualMonitor:
         if current is None or action is None:
             return
 
-        observation = json.loads(observation_file.read_text(encoding="utf-8"))
+        manifest = json.loads(observation_file.read_text(encoding="utf-8"))
+        observation = self._observation_store.load()
         observation_revision = int(
-            observation.get("revision", observation_file.stat().st_mtime_ns)
+            manifest.get("revision", observation_file.stat().st_mtime_ns)
         )
         action_id = str(action["id"])
         input_key = (current.plan_revision, action_id, observation_revision)
@@ -229,27 +233,35 @@ class VisualMonitor:
             return
         self._last_input = input_key
 
-        reference_name = str(observation["reference_view"])
-        reference = next(
-            view
-            for view in observation["views"]
-            if str(view["name"]) == reference_name
+        using_verification_views = (
+            observation_file == self._observation_store.verification_manifest_path
         )
-        image_path = self.workspace / str(reference["image_path"])
-        encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        if using_verification_views:
+            views = observation.views
+        else:
+            views = tuple(
+                view
+                for view in observation.views
+                if view.name == observation.reference_view
+            )
+
+        content: list[TextContent | ImageContent] = [
+            TextContent(
+                "Verify whether the current plan subgoal is already achieved.\n"
+                f"Subgoal: {current.subgoal}\n"
+                f"Done criterion: {current.done_criterion}"
+            )
+        ]
+        for view in views:
+            content.extend(
+                (
+                    TextContent(f"Camera view: {view.name}"),
+                    ImageContent(view.image_data_url(), detail="high"),
+                )
+            )
 
         task = SubagentTask(
-            content=(
-                TextContent(
-                    "Verify whether the current plan subgoal is already achieved.\n"
-                    f"Subgoal: {current.subgoal}\n"
-                    f"Done criterion: {current.done_criterion}"
-                ),
-                ImageContent(
-                    f"data:image/png;base64,{encoded_image}",
-                    detail="high",
-                ),
-            ),
+            content=tuple(content),
             timeout=self.verification_timeout_seconds,
         )
         if self._main_loop is None:
