@@ -35,6 +35,8 @@ OPENPI_B1K_ROBOT="${OPENPI_B1K_ROBOT:-b1k/R1Pro}"
 OPENPI_B1K_TASK="${OPENPI_B1K_TASK:-b1k/turning_on_radio}"
 OPENPI_B1K_REPO_ID="${OPENPI_B1K_REPO_ID:-turning_on_radio}"
 OPENPI_B1K_POLICY_CONFIG="${OPENPI_B1K_POLICY_CONFIG:-pi05_b1k}"
+OPENPI_CHAMPION_MAPPING="${OPENPI_CHAMPION_MAPPING:-${OPENPI_ROOT}/task_checkpoint_mapping.json}"
+OPENPI_CHAMPION_POLICY_CONFIG="${OPENPI_CHAMPION_POLICY_CONFIG:-pi_behavior_b1k_fast}"
 OPENPI_MAX_BATCH_SIZE="${OPENPI_MAX_BATCH_SIZE:-4}"
 OPENPI_BATCH_WAIT_MS="${OPENPI_BATCH_WAIT_MS:-10}"
 VGGT_MAX_BATCH_SIZE="${VGGT_MAX_BATCH_SIZE:-4}"
@@ -87,8 +89,9 @@ Service selection and runtime:
                                 (default: auto-detect python3 or python)
 
 OpenPI:
-  OPENPI_SERVER_MODE             standard or behavior_b1k (default: standard)
-  OPENPI_ROOT                    OpenPI checkout used by behavior_b1k mode
+  OPENPI_SERVER_MODE             standard, behavior_b1k, or behavior_champion
+                                (default: standard)
+  OPENPI_ROOT                    Policy checkout used by a BEHAVIOR mode
                                 (default: <repo>/third_party/openpi)
   OPENPI_ENV                    Conda environment (default: pi05_server)
   OPENPI_PYTHON                 Direct Python executable; bypasses OPENPI_ENV
@@ -104,6 +107,9 @@ OpenPI:
   OPENPI_B1K_REPO_ID            Norm-stat repository ID
                                 (default: turning_on_radio)
   OPENPI_B1K_POLICY_CONFIG      OpenPI training config (default: pi05_b1k)
+  OPENPI_CHAMPION_MAPPING       Champion task-to-checkpoint mapping file
+  OPENPI_CHAMPION_POLICY_CONFIG Champion policy config
+                                (default: pi_behavior_b1k_fast)
   OPENPI_MAX_BATCH_SIZE         Maximum requests per batch (default: 4)
   OPENPI_BATCH_WAIT_MS          Maximum batch collection time in ms
                                 (default: 10)
@@ -427,8 +433,18 @@ if service_enabled openpi; then
                 exit 1
             fi
             ;;
+        behavior_champion)
+            require_path "champion policy root" "${OPENPI_ROOT}"
+            require_path "champion BEHAVIOR server" "${OPENPI_ROOT}/scripts/serve_b1k.py"
+            require_path "champion initial checkpoint" "${OPENPI_CHECKPOINT}"
+            require_path "champion checkpoint mapping" "${OPENPI_CHAMPION_MAPPING}"
+            if [[ -z "${OPENPI_PYTHON}" ]]; then
+                echo -e "${RED}✗ behavior_champion mode requires OPENPI_PYTHON${RESET}" >&2
+                exit 1
+            fi
+            ;;
         *)
-            echo -e "${RED}✗ OPENPI_SERVER_MODE must be standard or behavior_b1k${RESET}" >&2
+            echo -e "${RED}✗ OPENPI_SERVER_MODE must be standard, behavior_b1k, or behavior_champion${RESET}" >&2
             exit 2
             ;;
     esac
@@ -467,6 +483,22 @@ if service_enabled openpi; then
         )
         start_server_with_python_in_directory \
             "OpenPI BEHAVIOR server :${OPENPI_PORT}" \
+            "${OPENPI_PYTHON}" \
+            "${OPENPI_GPU}" \
+            "${OPENPI_ROOT}" \
+            "${openpi_command[@]}"
+    elif [[ "${OPENPI_SERVER_MODE}" == "behavior_champion" ]]; then
+        openpi_command=(
+            "${OPENPI_PYTHON}"
+            scripts/serve_b1k.py
+            --port "${OPENPI_PORT}"
+            --task-checkpoint-mapping "${OPENPI_CHAMPION_MAPPING}"
+            policy:checkpoint
+            --policy.config "${OPENPI_CHAMPION_POLICY_CONFIG}"
+            --policy.dir "${OPENPI_CHECKPOINT}"
+        )
+        start_server_with_python_in_directory \
+            "OpenPI BEHAVIOR champion server :${OPENPI_PORT}" \
             "${OPENPI_PYTHON}" \
             "${OPENPI_GPU}" \
             "${OPENPI_ROOT}" \

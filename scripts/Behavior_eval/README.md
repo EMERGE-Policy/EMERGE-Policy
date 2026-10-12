@@ -6,7 +6,7 @@ setup and process supervision, while the robot driver and transport live under
 `robot/`.
 
 The first supported setup is one `turning_on_radio` instance with the R1Pro
-robot and the official single-task π0.5 checkpoint.
+robot and the champion multi-checkpoint PI_BEHAVIOR policy.
 
 ## Code ownership
 
@@ -19,7 +19,7 @@ robot and the official single-task π0.5 checkpoint.
 | `robot/behavior/` | BEHAVIOR websocket protocol, status contract, and observation publishing. |
 | `robot/profiles/behavior_r1pro.md` | Controller-installed robot profile. |
 | `dev/behavior_agent_eval.json` | Checked-in base driver configuration. |
-| `dev/behavior_r1pro_openpi.yaml` | Reproducible v3.9.3 R1Pro evaluator config using the observation-key name expected by the public π0.5 checkpoint. |
+| `dev/behavior_r1pro_openpi.yaml` | Reproducible v3.9.3 R1Pro evaluator config using the observation-key name expected by the champion PI_BEHAVIOR policy. |
 
 BEHAVIOR is no longer an external EMERGE plugin. The native driver is
 registered as `behavior_r1pro` in `robot/drivers/__init__.py`; no plugin home or
@@ -31,7 +31,7 @@ One episode intentionally spans separate Python environments:
 
 | Process | Environment | Role |
 |---|---|---|
-| OpenPI server | `/data/yxy/openpi/.venv` | External π0.5 inference service |
+| OpenPI server | `third_party/behavior-1k-solution/.venv` | Champion PI_BEHAVIOR inference service |
 | SAM3 server | `EmergePolicy` | External prompt-guided segmentation service |
 | Runner, Agent, Controller | `phyagentos` | EMERGE reasoning, action queue, and native driver |
 | BEHAVIOR evaluator | `/data/yxy/envs/behavior` | Isaac Sim, episode lifecycle, and official scoring |
@@ -47,7 +47,7 @@ run alongside the policy and evaluator:
 | EMERGE gateway | 8000 |
 | VGGT | 8001 |
 | SAM3 | 8002 |
-| OpenPI π0.5 | 8011 |
+| OpenPI champion policy | 8011 |
 
 `--gateway-port` and `--upstream-port` may override the gateway and OpenPI
 ports. They must remain different; when VGGT and SAM3 use their standard
@@ -61,10 +61,13 @@ and the BEHAVIOR evaluator. Starting the SAM3 service does not make the Agent
 segment every frame: only an `object_location` sub-agent call sends current
 images and prompts to that service.
 
-The original repository layout expects the SAM3 source submodule and checkpoint
-at these locations:
+The integrated layout expects the champion policy checkout, its mapping, the
+four checkpoints, and the SAM3 dependency at these locations:
 
 ```text
+third_party/behavior-1k-solution/
+third_party/behavior-1k-solution/task_checkpoint_mapping.json
+checkpoints/behavior_submission_hfmirror/checkpoint_{1,2,3,4}/
 third_party/sam3/
 checkpoints/sam3/model.pt
 ```
@@ -122,7 +125,7 @@ cd /data/yxy/EMERGE-Humanoid
 ```
 
 When `--output-dir` is omitted, every invocation automatically uses a fresh
-`/data/yxy/emerge_pi05_eval/turning_on_radio_agent_YYYYMMDD_HHMMSS/`
+`/data/yxy/outputs/YYYYMMDD_HHMMSS/`
 directory. Pass `--output-dir` only when an explicit location is required.
 
 The Agent uses EMERGE's native `~/.Emerge/config.json` provider configuration.
@@ -157,7 +160,7 @@ not enqueue actions on its behalf or install a task-specific skill. The runner
 adds a benchmark task contract to `AGENTS.md` so task-required physical order
 is explicit without shadowing any reusable skill. It uses the
 same generic planning, object-location, attach, VLA, and verification skills as
-the LIBERO path. It can combine bounded π0.5 chunks with
+the LIBERO path. It can combine bounded champion-policy action chunks with
 calibrated `object_location`, native R1Pro `move_to_pose` / `move_linear` /
 `set_gripper` actions, and `task_verification`. The official result remains authoritative:
 `step_completed` only means that a requested action budget was consumed. During
@@ -174,8 +177,8 @@ written by the evaluator in the same output tree.
 
 The runner connects to the already-running OpenPI and SAM3 endpoints; it does
 not own either model process. It refuses to start Isaac Sim when either service
-is unhealthy, preventing an expensive run from silently dropping π0.5 control
-or measured localization. BEHAVIOR uses native calibrated RGB-D, so an Agent
+is unhealthy, preventing an expensive run from silently dropping champion-policy
+control or measured localization. BEHAVIOR uses native calibrated RGB-D, so an Agent
 config that explicitly selects `geometryBackend: vggt` is rejected.
 
 ## Verify
@@ -194,7 +197,7 @@ Verify a finished episode using only its artifacts:
 ```bash
 /home/embodied/miniconda3/envs/phyagentos/bin/python -B \
   -m scripts.Behavior_eval.checks.verify_artifacts \
-  --output-dir /data/yxy/emerge_pi05_eval/turning_on_radio_agent_YYYYMMDD_HHMMSS \
+  --output-dir /data/yxy/outputs/YYYYMMDD_HHMMSS \
   --require-success \
   --require-agent-result
 ```
@@ -212,8 +215,7 @@ provide:
 
 The runner uses `--num-envs 1` and disables optional client-side action-chunk
 replay so that each gateway permit still corresponds to one simulator action.
-It selects BEHAVIOR's stock `RGBDFullResWrapper`: π0.5 continues to consume the
-three RGB keys and resizes them internally to 224x224, while EMERGE saves the
+It selects BEHAVIOR's stock `RGBDFullResWrapper`: the champion policy continues to consume the three RGB keys and resizes them internally to 224x224, while EMERGE saves the
 aligned metre-valued `depth_linear` arrays as a read-only side copy. The raw
 websocket message forwarded to OpenPI is unchanged.
 The companion evaluator changes in the BEHAVIOR repository publish the optional
@@ -242,7 +244,7 @@ the Agent/SAM3 delegation contract remains unchanged.
 
 Object localization keeps the original robot camera contract: head, left wrist,
 and right wrist RGB-D, with calibrated depth and camera geometry. Those inputs
-are also the only camera inputs forwarded to π0.5.
+are also the only camera inputs forwarded to the champion policy.
 
 Task verification reads a separate RGB-only manifest published by the BEHAVIOR
 evaluator. Its ordered views are `room_overview`, `table_overhead`,
@@ -254,23 +256,22 @@ RGB-D localization manifest and does not alter the OpenPI websocket payload.
 
 ## Navigation-to-manipulation handoff
 
-The R1Pro driver starts each episode in `navigation` mode, where π0.5 controls
-the full official 23-D action. Once the visual monitor confirms that the target
+The R1Pro driver starts each episode in `navigation` mode, where the champion policy controls the full official 23-D action. Once the visual monitor confirms that the target
 is in bimanual reach and no more base translation is needed, the Agent calls
 `set_control_mode` with `{"mode": "manipulation"}`. The gateway then sets
-only the base x/y/yaw entries to zero while forwarding π0.5's trunk, arm, and
-gripper outputs. The active mode and `base_motion_enabled` flag are visible in
+only the base x/y/yaw entries to zero while forwarding the champion policy's
+trunk, arm, and gripper outputs. The active mode and `base_motion_enabled` flag are visible in
 `ROBOT_STATE.md`. A new evaluator episode automatically resets the mode to
 `navigation`.
 
 ## Current limits
 
-- Only `turning_on_radio`, R1Pro, and the official single-task π0.5 checkpoint
-  are wired into this entrypoint.
+- The EMERGE runner currently wires only `turning_on_radio` and R1Pro; the
+  policy server itself has mappings for all 50 champion tasks.
 - Camera RGB, linear depth, extrinsics, and current R1Pro proprioception are
   copied from the official evaluator observation into one revision-consistent
   manifest without changing the OpenPI wire message. Extrinsics and
   localization results use the `robot_base` coordinate frame; checked-in
   intrinsics match the official v3.9.3 full-resolution RGB-D wrapper.
-- The BEHAVIOR evaluator and its R1Pro configuration remain external to this
-  repository.
+- The BEHAVIOR evaluator and its R1Pro configuration come from the pinned
+  `third_party/behavior-1k` submodule.

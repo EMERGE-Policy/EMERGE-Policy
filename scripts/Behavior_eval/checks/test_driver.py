@@ -18,8 +18,8 @@ from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
 
 PROMPT = contracts.OFFICIAL_PROMPT
 URDF = (
-    Path(__file__).resolve().parents[3].parent
-    / "BEHAVIOR-1K/datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf"
+    Path(__file__).resolve().parents[3]
+    / "third_party/behavior-1k/datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf"
 )
 
 

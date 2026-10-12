@@ -7,7 +7,7 @@ never pull in numpy, PIL, msgpack, or websockets.
 The module owns three kinds of truth that used to be duplicated across the
 evaluation path:
 
-* the frozen instruction of the single-task π0.5 checkpoint,
+* the official instruction enforced by this initial task runner,
 * the shape rules for ``vla_execute`` parameters and for the driver
   configuration object, and
 * the classification of an episode's outcome.
@@ -60,9 +60,9 @@ def normalize_instruction(text: str) -> str:
 def validate_instruction(value: Any, *, required_instruction: str) -> str:
     """Return the normalized instruction or raise :class:`ActionValidationError`.
 
-    This checkpoint fixes its prompt when the OpenPI server starts, so the
-    gateway cannot deliver a different sentence to the policy.  Rejecting a
-    rewrite locally keeps the Agent from believing it changed the prompt.
+    This initial task runner deliberately exposes only the official episode
+    instruction to the policy. Rejecting a rewrite locally keeps the Agent from
+    believing it changed the prompt.
     """
     if value is None:
         raise ActionValidationError("vla_execute requires instruction or prompt")
@@ -74,7 +74,7 @@ def validate_instruction(value: Any, *, required_instruction: str) -> str:
     expected = normalize_instruction(required_instruction)
     if instruction != expected:
         raise ActionValidationError(
-            "this single-task checkpoint requires the exact instruction: " f"{expected}"
+            "this evaluation entrypoint requires the exact instruction: " f"{expected}"
         )
     return instruction
 

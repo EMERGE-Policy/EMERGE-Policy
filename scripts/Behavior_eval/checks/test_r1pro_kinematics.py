@@ -11,8 +11,8 @@ from robot.behavior.r1pro_kinematics import R1ProKinematics
 
 
 URDF = (
-    Path(__file__).resolve().parents[3].parent
-    / "BEHAVIOR-1K/datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf"
+    Path(__file__).resolve().parents[3]
+    / "third_party/behavior-1k/datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf"
 )
 TRUNK = np.asarray([1.025, -1.45, -0.47, 0.0], dtype=np.float64)
 

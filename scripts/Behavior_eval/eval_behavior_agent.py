@@ -100,8 +100,8 @@ You control one R1Pro episode for `turning_on_radio` through the
   the target is in bimanual reach and no further base translation is needed,
   call `set_control_mode` with `{{"mode": "manipulation"}}` before the next
   contact or VLA action. Confirm `base_motion_enabled == false`; this keeps
-  π0.5 control of the trunk, arms, and grippers while forcing base velocity to
-  zero.
+  OpenPI policy control of the trunk, arms, and grippers while forcing base
+  velocity to zero.
 - The authoritative completion signal is
   `robots.behavior_r1pro.evaluation.success` together with
   `robots.behavior_r1pro.evaluation.phase == "completed"`.
@@ -132,7 +132,7 @@ You control one R1Pro episode for `turning_on_radio` through the
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--behavior-root", type=Path, default=WORKSPACE_ROOT / "BEHAVIOR-1K")
+    parser.add_argument("--behavior-root", type=Path, default=EMERGE_ROOT / "third_party/behavior-1k")
     parser.add_argument(
         "--agent-python",
         type=Path,
@@ -186,7 +186,7 @@ def parse_args() -> argparse.Namespace:
         default=default_output_dir("turning_on_radio_agent"),
         help=(
             "Episode artifact directory. When omitted, create a new timestamped "
-            f"directory under {WORKSPACE_ROOT / 'emerge_pi05_eval'}."
+            f"directory under {WORKSPACE_ROOT / 'outputs'}/YYYYMMDD_HHMMSS."
         ),
     )
     parser.add_argument("--instance-index", type=int, default=0)

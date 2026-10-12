@@ -36,7 +36,7 @@ def main() -> int:
     args = _parse_args()
     output_dir = Path(
         args.output_dir
-        or f"/data/yxy/emerge_pi05_eval/diagnostic_camera_preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        or f"/data/yxy/outputs/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     ).resolve()
 
     gm.HEADLESS = True

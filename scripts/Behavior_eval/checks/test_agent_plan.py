@@ -48,7 +48,7 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         ):
             with self.subTest(action=action):
                 self.assertIn(f"`{action}`", profile)
-        self.assertIn("Switching back to π0.5 resets its action chunk", profile)
+        self.assertIn("Switching back to the OpenPI policy resets its action chunk", profile)
         self.assertIn("preserve the current wrist orientation", profile)
         self.assertIn("sole authoritative success signal", profile)
         self.assertIn("generic EMERGE skill", profile)

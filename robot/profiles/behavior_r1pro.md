@@ -23,10 +23,10 @@ gateway status. Read both files again after every physical action.
 
 ### `vla_execute`
 
-Use the official π0.5 policy for coarse whole-body navigation and visually
-sensitive contact:
+Use the champion PI_BEHAVIOR policy for coarse whole-body navigation and
+visually sensitive contact:
 
-This single-task policy endpoint uses a fixed episode instruction. Copy
+This evaluation entrypoint uses the official episode instruction. Copy
 `robots.behavior_r1pro.effective_prompt` exactly into every `vla_execute` call;
 keep the current local phase in `PLAN.md` and the action reasoning rather than
 rewriting the policy prompt. `step` is a positive policy action budget no
@@ -111,8 +111,9 @@ and no further base translation is needed, switch at the action boundary:
 ```
 
 In `manipulation` mode the gateway forces the first three entries of every
-official 23-D π0.5 action (base x/y/yaw velocity) to zero. Trunk, both arms,
-and both grippers remain controlled by π0.5. The transition resets OpenPI so
+official 23-D policy action (base x/y/yaw velocity) to zero. Trunk, both arms,
+and both grippers remain controlled by the OpenPI policy. The transition resets
+OpenPI so
 the next VLA call replans from the current observation. Check
 `control_mode` and `base_motion_enabled` in `ROBOT_STATE.md` before
 contact. Return to `navigation` only when fresh verification shows that the
@@ -126,8 +127,8 @@ implemented by this driver.
 Every local primitive is bounded by official joint limits and a per-step joint
 change limit. Before dispatch, the driver compares URDF forward kinematics with
 the observed end-effector position. It refuses the action if the coordinate
-conventions disagree. Switching back to π0.5 resets its action chunk so the
-policy replans from the post-primitive observation.
+conventions disagree. Switching back to the OpenPI policy resets its action chunk
+so the policy replans from the post-primitive observation.
 
 ## Result and success semantics
 

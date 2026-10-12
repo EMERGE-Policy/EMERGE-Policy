@@ -78,12 +78,16 @@ class RunnerCliTest(unittest.TestCase):
         self.assertEqual(args.gateway_port, 8000)
         self.assertEqual(args.upstream_port, 8011)
         self.assertEqual(
+            args.behavior_root,
+            Path(__file__).resolve().parents[3] / "third_party/behavior-1k",
+        )
+        self.assertEqual(
             args.output_dir.parent,
-            Path(__file__).resolve().parents[4] / "emerge_pi05_eval",
+            Path(__file__).resolve().parents[4] / "outputs",
         )
         self.assertRegex(
             args.output_dir.name,
-            re.compile(r"^turning_on_radio_agent_\d{8}_\d{6}$"),
+            re.compile(r"^\d{8}_\d{6}$"),
         )
 
     def test_native_config_name_and_live_options_are_accepted(self) -> None:
@@ -331,6 +335,10 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        text = launcher.read_text(encoding="utf-8")
+        self.assertIn('OPENPI_SERVER_MODE="behavior_champion"', text)
+        self.assertIn("third_party/behavior-1k-solution", text)
+        self.assertIn("task_checkpoint_mapping.json", text)
 
     def test_checked_in_camera_intrinsics_match_official_rgbd_wrapper(self) -> None:
         config_path = Path(__file__).resolve().parents[3] / "dev/behavior_agent_eval.json"
