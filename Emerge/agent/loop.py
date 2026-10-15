@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from Emerge.agent.context import ContextBuilder
+from Emerge.agent.skills import BUILTIN_SKILLS_DIR
 from Emerge.agent.visual_monitor import (
     VisualInterruptCoordinator,
     VisualMonitor,
@@ -169,7 +170,17 @@ class AgentLoop:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         protected_paths = {self.workspace / "PLAN.md"}
-        for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool):
+        self.tools.register(
+            ReadFileTool(
+                workspace=self.workspace,
+                allowed_dir=allowed_dir,
+                protected_paths=protected_paths,
+                additional_allowed_dirs=(
+                    (BUILTIN_SKILLS_DIR,) if self.restrict_to_workspace else ()
+                ),
+            )
+        )
+        for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(
                 cls(
                     workspace=self.workspace,

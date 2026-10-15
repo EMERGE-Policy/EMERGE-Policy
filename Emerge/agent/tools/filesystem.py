@@ -60,6 +60,36 @@ class ReadFileTool(_FsTool):
     _MAX_CHARS = 128_000
     _DEFAULT_LIMIT = 2000
 
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dir: Path | None = None,
+        protected_paths: Iterable[str | Path] | None = None,
+        additional_allowed_dirs: Iterable[str | Path] | None = None,
+    ) -> None:
+        super().__init__(
+            workspace=workspace,
+            allowed_dir=allowed_dir,
+            protected_paths=protected_paths,
+        )
+        self._additional_allowed_dirs = tuple(
+            Path(path).expanduser().resolve()
+            for path in (additional_allowed_dirs or ())
+        )
+
+    def _resolve(self, path: str) -> Path:
+        try:
+            return super()._resolve(path)
+        except PermissionError as original:
+            candidate = _resolve_path(path, self._workspace)
+            for allowed in self._additional_allowed_dirs:
+                try:
+                    candidate.relative_to(allowed)
+                except ValueError:
+                    continue
+                return candidate
+            raise original
+
     @property
     def name(self) -> str:
         return "read_file"

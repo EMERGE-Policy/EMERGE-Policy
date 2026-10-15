@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one BEHAVIOR turning_on_radio episode with the real EMERGE Agent.
+"""Run one BEHAVIOR-1K episode with the real EMERGE Agent.
 
 The actions are chosen by the LLM Agent through ``execute_robot_action``. The
 runner owns the episode workspace and supervises OpenPI, the native EMERGE
@@ -35,8 +35,6 @@ from Emerge.utils.action_queue import (  # noqa: E402
 from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
 from robot.behavior.contracts import (  # noqa: E402
     EVALUATION_STATUS_SCHEMA,
-    OFFICIAL_PROMPT,
-    TASK_NAME,
     agent_exit_code,
     classify_episode,
     episode_terminated,
@@ -47,7 +45,6 @@ from scripts.Behavior_eval.runner_common import (  # noqa: E402
     assert_port_available,
     atomic_write_json,
     behavior_environment,
-    default_output_dir,
     prepare_workspace,
     read_json,
     require_executable,
@@ -65,8 +62,6 @@ DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
 DEFAULT_GATEWAY_PORT = 8000
 DEFAULT_OPENPI_PORT = 8011
 BEHAVIOR_RGBD_WRAPPER = "omnigibson.eval.wrappers.RGBDFullResWrapper"
-TASK_GUIDANCE_PATH = SCRIPT_DIR / "tasks" / "turning_on_radio.md"
-TASK_GUIDANCE_MARKER = "## turning_on_radio execution contract"
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -81,18 +76,20 @@ INFRASTRUCTURE_FINISH_REASONS = frozenset(
     }
 )
 
-EVALUATION_INSTRUCTIONS = f"""
+def _evaluation_instructions(task_name: str, instruction: str) -> str:
+    """Return benchmark rules parameterized by the selected task."""
+    return f"""
 ## BEHAVIOR-1K Evaluation Rules
 
-You control one R1Pro episode for `turning_on_radio` through the
+You control one R1Pro episode for `{task_name}` through the
 `behavior_r1pro` driver.
 
 - Plan from the current observation and task state using EMERGE's generic
-  planning, object-location, attach, VLA, and verification skills. Follow the
-  task execution contract appended below these evaluation rules.
+  planning, object-location, attach, VLA, and verification skills. If a
+  task-specific execution contract is appended below, follow it.
 - This checkpoint has a fixed episode instruction. For every `vla_execute`,
   copy `robots.behavior_r1pro.effective_prompt` exactly; for this episode it is
-  `{OFFICIAL_PROMPT}`. Do not rewrite it as a phase-local prompt.
+  `{instruction}`. Do not rewrite it as a phase-local prompt.
 - `step` is an action budget and must not exceed
   `robots.behavior_r1pro.max_action_steps` in `ROBOT_STATE.md`.
 - Use bounded chunks and inspect `ROBOT_STATE.md` after every action.
@@ -154,6 +151,14 @@ def parse_args() -> argparse.Namespace:
         help="Base configuration for the native behavior_r1pro driver.",
     )
     parser.add_argument(
+        "--task-name",
+        help="Override expected_task from the driver config.",
+    )
+    parser.add_argument(
+        "--task-instruction",
+        help="Override required_instruction from the driver config.",
+    )
+    parser.add_argument(
         "--robot-config",
         type=Path,
         default=DEFAULT_ROBOT_CONFIG,
@@ -183,20 +188,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=default_output_dir("turning_on_radio_agent"),
+        default=None,
         help=(
-            "Episode artifact directory. When omitted, create a new timestamped "
-            f"directory under {WORKSPACE_ROOT / 'outputs'}/YYYYMMDD_HHMMSS."
+            "Episode artifact directory. Default: "
+            f"{WORKSPACE_ROOT / 'outputs/Emerge'}/<task>."
         ),
     )
     parser.add_argument("--instance-index", type=int, default=0)
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=3_224,
+        default=None,
         help=(
-            "Maximum BEHAVIOR simulator steps for the episode. Default: 3224, "
-            "the official turning_on_radio limit in BEHAVIOR v3.9.3."
+            "Optional BEHAVIOR simulator-step override. When omitted, the official "
+            "evaluator uses the task's configured limit."
         ),
     )
     parser.add_argument(
@@ -266,19 +271,22 @@ def parse_args() -> argparse.Namespace:
 # --------------------------------------------------------------------------- #
 
 
-def _prepare_workspace(workspace: Path) -> Path:
+def _prepare_workspace(workspace: Path, *, task_name: str, instruction: str) -> Path:
     """Sync generic EMERGE templates, add benchmark rules, and reset the queue."""
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, silent=True)
     agents_path = workspace / "AGENTS.md"
     existing = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
     if "BEHAVIOR-1K Evaluation Rules" not in existing:
-        existing = existing.rstrip() + "\n\n" + EVALUATION_INSTRUCTIONS + "\n"
-    if TASK_GUIDANCE_MARKER not in existing:
-        guidance = TASK_GUIDANCE_PATH.read_text(encoding="utf-8").strip()
+        rules = _evaluation_instructions(task_name, instruction)
+        existing = existing.rstrip() + "\n\n" + rules + "\n"
+    task_guidance_path = SCRIPT_DIR / "tasks" / f"{task_name}.md"
+    guidance_marker = f"## {task_name} execution contract"
+    if task_guidance_path.is_file() and guidance_marker not in existing:
+        guidance = task_guidance_path.read_text(encoding="utf-8").strip()
         existing = existing.rstrip() + "\n\n" + guidance + "\n"
     agents_path.write_text(existing, encoding="utf-8")
-    prepare_workspace(workspace, task_name=TASK_NAME, instruction=OFFICIAL_PROMPT)
+    prepare_workspace(workspace, task_name=task_name, instruction=instruction)
     return workspace
 
 
@@ -309,6 +317,8 @@ def _episode_driver_config(
     gateway_port: int,
     max_action_steps: int,
     state_sync_timeout_s: float,
+    task_name: str,
+    task_instruction: str,
     r1pro_urdf_path: Path | None = None,
 ) -> Path:
     """Write one episode-local config, following the native LIBERO runner."""
@@ -319,12 +329,12 @@ def _episode_driver_config(
             "upstream_url": f"ws://127.0.0.1:{upstream_port}",
             "listen_host": "127.0.0.1",
             "listen_port": gateway_port,
-            "required_instruction": OFFICIAL_PROMPT,
+            "required_instruction": task_instruction,
             "max_action_steps": max_action_steps,
             "status_path": str(status_path),
             "execution_timeout_s": _execution_timeout(max_action_steps),
             "state_sync_timeout_s": state_sync_timeout_s,
-            "expected_task": TASK_NAME,
+            "expected_task": task_name,
             "expected_instance_id": None,
             "r1pro_urdf_path": str(r1pro_urdf_path) if r1pro_urdf_path else None,
         }
@@ -335,7 +345,9 @@ def _episode_driver_config(
     return path
 
 
-def _write_running_evaluation_status(status_path: Path) -> dict[str, Any]:
+def _write_running_evaluation_status(
+    status_path: Path, *, task_name: str
+) -> dict[str, Any]:
     """Publish EMERGE's live view of an official evaluator that is running.
 
     BEHAVIOR 3.9.3 writes its authoritative metrics only when the rollout
@@ -346,7 +358,7 @@ def _write_running_evaluation_status(status_path: Path) -> dict[str, Any]:
     status = {
         "schema_version": EVALUATION_STATUS_SCHEMA,
         "source": "emerge_supervisor",
-        "task": TASK_NAME,
+        "task": task_name,
         "rollout_id": 0,
         "phase": "running",
         "steps": None,
@@ -358,9 +370,11 @@ def _write_running_evaluation_status(status_path: Path) -> dict[str, Any]:
     return status
 
 
-def _read_official_result(output_dir: Path) -> tuple[Path, dict[str, Any]]:
+def _read_official_result(
+    output_dir: Path, *, task_name: str
+) -> tuple[Path, dict[str, Any]]:
     """Read the single result emitted by the official BEHAVIOR evaluator."""
-    result_paths = sorted((output_dir / "json").glob(f"{TASK_NAME}_*_0.json"))
+    result_paths = sorted((output_dir / "json").glob(f"{task_name}_*_0.json"))
     if len(result_paths) != 1:
         raise RuntimeError(
             "expected exactly one official BEHAVIOR result for the single-instance run, "
@@ -379,7 +393,7 @@ def _read_official_result(output_dir: Path) -> tuple[Path, dict[str, Any]]:
         raise RuntimeError(
             f"official BEHAVIOR result is missing {', '.join(missing)}: {result_path}"
         )
-    if str(result["task"]) != TASK_NAME or int(result["rollout_id"]) != 0:
+    if str(result["task"]) != task_name or int(result["rollout_id"]) != 0:
         raise RuntimeError(
             f"official BEHAVIOR result does not match this run: {result_path}"
         )
@@ -391,16 +405,18 @@ def _read_official_result(output_dir: Path) -> tuple[Path, dict[str, Any]]:
 def _write_completed_evaluation_status(
     output_dir: Path,
     status_path: Path,
+    *,
+    task_name: str,
 ) -> dict[str, Any]:
     """Translate the official final result into the Agent's episode contract."""
-    result_path, result = _read_official_result(output_dir)
+    result_path, result = _read_official_result(output_dir, task_name=task_name)
     q_score = result.get("q_score")
     if isinstance(q_score, dict):
         q_score = q_score.get("final")
     status = {
         "schema_version": EVALUATION_STATUS_SCHEMA,
         "source": "official_result",
-        "task": TASK_NAME,
+        "task": task_name,
         "instance_id": int(result["instance_id"]),
         "rollout_id": int(result["rollout_id"]),
         "phase": "completed",
@@ -415,11 +431,13 @@ def _write_completed_evaluation_status(
     return status
 
 
-def _write_evaluator_error_status(status_path: Path, detail: str) -> dict[str, Any]:
+def _write_evaluator_error_status(
+    status_path: Path, detail: str, *, task_name: str
+) -> dict[str, Any]:
     status = {
         "schema_version": EVALUATION_STATUS_SCHEMA,
         "source": "emerge_supervisor",
-        "task": TASK_NAME,
+        "task": task_name,
         "rollout_id": 0,
         "phase": "error",
         "success": False,
@@ -436,20 +454,20 @@ def _evaluator_command(
     behavior_python: Path,
     robot_config: Path,
     gateway_port: int,
+    task_name: str,
     instance_index: int,
-    max_steps: int,
+    max_steps: int | None,
     output_dir: Path,
-    workspace: Path,
     write_video: bool,
     headless: bool,
 ) -> list[str]:
     """Build the stock BEHAVIOR 3.9.3 single-environment command."""
-    return [
+    command = [
         str(behavior_python),
         "-m",
         "omnigibson.eval.eval",
         "--task-name",
-        TASK_NAME,
+        task_name,
         "--robot-config",
         str(robot_config),
         "--mode",
@@ -464,28 +482,28 @@ def _evaluator_command(
         "1",
         "--replay-action-chunk-size",
         "0",
-        "--max-steps",
-        str(max_steps),
         "--env-wrapper",
         BEHAVIOR_RGBD_WRAPPER,
         "--output-dir",
         str(output_dir),
-        "--verification-observation-workspace",
-        str(workspace),
-        "--verification-publish-interval",
-        "5",
         "--write-video" if write_video else "--no-write-video",
         "--headless" if headless else "--no-headless",
     ]
+    if max_steps is not None:
+        insertion = command.index("--env-wrapper")
+        command[insertion:insertion] = ["--max-steps", str(max_steps)]
+    return command
 
 
-def _agent_message(max_action_steps: int) -> str:
+def _agent_message(
+    max_action_steps: int, *, task_name: str, task_instruction: str
+) -> str:
     return (
         "Complete this BEHAVIOR-1K simulated robot task:\n\n"
-        f"{OFFICIAL_PROMPT}\n\n"
+        f"{task_instruction}\n\n"
         "Act autonomously through execute_robot_action. Use EMERGE's generic skills to "
-        "plan from current evidence and follow the turning_on_radio execution contract "
-        "in AGENTS.md. Complete grasping and reorientation before localizing the button. "
+        f"plan from current evidence for `{task_name}`. Follow a task-specific execution "
+        "contract in AGENTS.md when one is available. "
         "For every VLA call, copy robots.behavior_r1pro.effective_prompt exactly and "
         f"request at most {max_action_steps} steps. Re-read fresh state after each action, "
         "use measured geometry only when its preconditions hold, and change strategy after "
@@ -494,12 +512,14 @@ def _agent_message(max_action_steps: int) -> str:
     )
 
 
-def _feedback_message(status: dict[str, Any], max_action_steps: int) -> str:
+def _feedback_message(
+    status: dict[str, Any], max_action_steps: int, *, task_instruction: str
+) -> str:
     return (
         "Your previous turn ended before the episode finished. The official BEHAVIOR "
         "evaluator is still running, so continue the same episode and use "
         "execute_robot_action again.\n\n"
-        f"Task: {OFFICIAL_PROMPT}\n"
+        f"Task: {task_instruction}\n"
         f"Current evaluator status: {json.dumps(status, ensure_ascii=False)}\n"
         f"Maximum steps per action: {max_action_steps}.\n\n"
         "Inspect ROBOT_STATE.md, ACTION.md, the latest camera manifest, and PLAN.md before "
@@ -800,7 +820,7 @@ def _resume_decision(
 
 def main() -> int:
     args = parse_args()
-    if args.max_steps < 1:
+    if args.max_steps is not None and args.max_steps < 1:
         raise ValueError("--max-steps must be positive")
     if args.agent_max_iterations is not None and args.agent_max_iterations < 1:
         raise ValueError("--agent-max-iterations must be positive")
@@ -816,6 +836,19 @@ def main() -> int:
     agent_python = require_executable(args.agent_python, "EMERGE Agent Python")
     args.agent_python = agent_python
     base_driver_config = _load_driver_config(args.driver_config)
+    task_name = str(args.task_name or base_driver_config.get("expected_task") or "").strip()
+    task_instruction = str(
+        args.task_instruction or base_driver_config.get("required_instruction") or ""
+    ).strip()
+    if not task_name:
+        raise ValueError(
+            "task name is required: set expected_task in --driver-config or pass --task-name"
+        )
+    if not task_instruction:
+        raise ValueError(
+            "task instruction is required: set required_instruction in --driver-config "
+            "or pass --task-instruction"
+        )
     runtime_config = _agent_runtime_config(args)
     agent_model = _validate_agent_provider(args, runtime_config)
     print(f"EMERGE Agent provider ready for model: {agent_model}", flush=True)
@@ -829,22 +862,32 @@ def main() -> int:
     if args.preflight_only:
         print(
             "BEHAVIOR preflight passed: "
-            f"OpenPI={openpi_url}, SAM3={sam3_url}, BEHAVIOR={behavior_root}, "
+            f"task={task_name}, OpenPI={openpi_url}, SAM3={sam3_url}, "
+            f"BEHAVIOR={behavior_root}, "
             f"robot_config={robot_config}, gateway_port={args.gateway_port}.",
             flush=True,
         )
         return 0
 
-    output_dir = assert_fresh_output_dir(args.output_dir)
+    requested_output = args.output_dir or WORKSPACE_ROOT / "outputs/Emerge" / task_name
+    output_dir = assert_fresh_output_dir(requested_output)
     logs_dir = output_dir / "logs"
     workspace = output_dir / "workspace"
     status_path = workspace / "BEHAVIOR_STATUS.json"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    _prepare_workspace(workspace)
+    _prepare_workspace(
+        workspace,
+        task_name=task_name,
+        instruction=task_instruction,
+    )
     runtime_environment = dict(os.environ)
     runtime_environment["NO_COLOR"] = "1"
     runtime_environment["TERM"] = "dumb"
-    max_action_steps = args.max_steps + 2
+    max_action_steps = (
+        args.max_steps + 2
+        if args.max_steps is not None
+        else int(base_driver_config.get("max_action_steps", 4000))
+    )
     driver_config = _episode_driver_config(
         base_driver_config,
         output_dir=output_dir,
@@ -854,6 +897,8 @@ def main() -> int:
         gateway_port=args.gateway_port,
         max_action_steps=max_action_steps,
         state_sync_timeout_s=args.state_sync_timeout,
+        task_name=task_name,
+        task_instruction=task_instruction,
         r1pro_urdf_path=behavior_root
         / "datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf",
     )
@@ -902,10 +947,10 @@ def main() -> int:
                 behavior_python=behavior_python,
                 robot_config=robot_config,
                 gateway_port=args.gateway_port,
+                task_name=task_name,
                 instance_index=args.instance_index,
                 max_steps=args.max_steps,
                 output_dir=output_dir,
-                workspace=workspace,
                 write_video=args.write_video,
                 headless=args.headless,
             )
@@ -923,12 +968,16 @@ def main() -> int:
                 label="the BEHAVIOR evaluator to connect to the controlled gateway",
                 processes=[controller, evaluator],
             )
-            _write_running_evaluation_status(status_path)
+            _write_running_evaluation_status(status_path, task_name=task_name)
 
-            session_id = f"cli:behavior-turning-on-radio-{uuid.uuid4().hex}"
+            session_id = f"cli:behavior-{task_name.replace('_', '-')}-{uuid.uuid4().hex}"
             agent = _start_agent(
                 args=args,
-                message=_agent_message(max_action_steps),
+                message=_agent_message(
+                    max_action_steps,
+                    task_name=task_name,
+                    task_instruction=task_instruction,
+                ),
                 session_id=session_id,
                 workspace=workspace,
                 environment=runtime_environment,
@@ -946,18 +995,30 @@ def main() -> int:
                     evaluator_code = evaluator.returncode
                     if evaluator_code == 0:
                         try:
-                            status = _write_completed_evaluation_status(output_dir, status_path)
+                            status = _write_completed_evaluation_status(
+                                output_dir,
+                                status_path,
+                                task_name=task_name,
+                            )
                             termination_reason = str(
                                 status.get("termination_reason") or "evaluator_done"
                             )
                         except Exception as exc:
                             infrastructure_error = f"official_result_error: {exc}"
                             termination_reason = "official_result_error"
-                            _write_evaluator_error_status(status_path, infrastructure_error)
+                            _write_evaluator_error_status(
+                                status_path,
+                                infrastructure_error,
+                                task_name=task_name,
+                            )
                     else:
                         termination_reason = f"evaluator_exit_{evaluator_code}"
                         infrastructure_error = termination_reason
-                        _write_evaluator_error_status(status_path, infrastructure_error)
+                        _write_evaluator_error_status(
+                            status_path,
+                            infrastructure_error,
+                            task_name=task_name,
+                        )
                     _settle_agent(agent, agent_results, timeout_s=5.0)
                     break
                 if controller.poll() is not None:
@@ -1006,7 +1067,11 @@ def main() -> int:
                     agent_log.flush()
                     agent = _start_agent(
                         args=args,
-                        message=_feedback_message(read_json(status_path), max_action_steps),
+                        message=_feedback_message(
+                            read_json(status_path),
+                            max_action_steps,
+                            task_instruction=task_instruction,
+                        ),
                         session_id=session_id,
                         workspace=workspace,
                         environment=runtime_environment,
@@ -1044,9 +1109,9 @@ def main() -> int:
     )
     result = {
         "schema_version": "Emerge.behavior_episode_result.v1",
-        "task": TASK_NAME,
+        "task": task_name,
         "instance_index": args.instance_index,
-        "instruction": OFFICIAL_PROMPT,
+        "instruction": task_instruction,
         "success": success,
         "episode_terminated": episode_terminated(status),
         "verdict": verdict,

@@ -30,3 +30,6 @@
 [submodule "third_party/behavior-1k-solution"]
 	path = third_party/behavior-1k-solution
 	url = https://github.com/hrm-666/behavior-1k-solution.git
+[submodule "third_party/lightnav-0"]
+	path = third_party/lightnav-0
+	url = https://github.com/lightorigins/LightNav-0.git

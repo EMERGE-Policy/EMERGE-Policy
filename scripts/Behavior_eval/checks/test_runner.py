@@ -48,6 +48,9 @@ from scripts.Behavior_eval.runner_common import (
     wait_for_condition,
 )
 
+TEST_TASK = "turning_on_radio"
+TEST_PROMPT = "Turn on the radio receiver that's on the table in the living room."
+
 
 def _pid_state(pid: int) -> str | None:
     """Return the /proc state letter, or None when the pid no longer exists."""
@@ -67,7 +70,7 @@ class RunnerCliTest(unittest.TestCase):
     def test_defaults_use_the_shorter_budget_and_headless_mode(self) -> None:
         with patch.object(sys, "argv", ["eval_behavior_agent.py"]):
             args = parse_args()
-        self.assertEqual(args.max_steps, 3224)
+        self.assertIsNone(args.max_steps)
         self.assertIsNone(args.agent_max_iterations)
         self.assertTrue(args.headless)
         self.assertFalse(args.show_agent_events)
@@ -81,14 +84,9 @@ class RunnerCliTest(unittest.TestCase):
             args.behavior_root,
             Path(__file__).resolve().parents[3] / "third_party/behavior-1k",
         )
-        self.assertEqual(
-            args.output_dir.parent,
-            Path(__file__).resolve().parents[4] / "outputs",
-        )
-        self.assertRegex(
-            args.output_dir.name,
-            re.compile(r"^\d{8}_\d{6}$"),
-        )
+        self.assertIsNone(args.output_dir)
+        self.assertIsNone(args.task_name)
+        self.assertIsNone(args.task_instruction)
 
     def test_native_config_name_and_live_options_are_accepted(self) -> None:
         with patch.object(
@@ -283,8 +281,9 @@ class NativeDriverConfigurationTest(unittest.TestCase):
                 {
                     "workspace": "unused",
                     "upstream_url": "ws://127.0.0.1:1",
-                    "required_instruction": contracts.OFFICIAL_PROMPT,
+                    "required_instruction": TEST_PROMPT,
                     "max_action_steps": 1,
+                    "expected_task": TEST_TASK,
                 },
                 output_dir=root,
                 workspace=workspace,
@@ -293,6 +292,8 @@ class NativeDriverConfigurationTest(unittest.TestCase):
                 gateway_port=8124,
                 max_action_steps=20_002,
                 state_sync_timeout_s=45.0,
+                task_name=TEST_TASK,
+                task_instruction=TEST_PROMPT,
             )
             config = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(config["workspace"], str(workspace))
@@ -300,7 +301,7 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             self.assertEqual(config["listen_port"], 8124)
             self.assertEqual(config["max_action_steps"], 20_002)
             self.assertEqual(config["status_path"], str(status_path))
-            self.assertEqual(config["expected_task"], contracts.TASK_NAME)
+            self.assertEqual(config["expected_task"], TEST_TASK)
 
     def test_behavior_driver_is_registered_without_a_plugin(self) -> None:
         from robot.drivers import DRIVER_REGISTRY
@@ -358,10 +359,10 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             behavior_python=Path("/env/bin/python"),
             robot_config=Path("/checkout/OmniGibson/omnigibson/eval/r1pro.yaml"),
             gateway_port=8124,
+            task_name=TEST_TASK,
             instance_index=3,
             max_steps=6000,
             output_dir=Path("/tmp/episode"),
-            workspace=Path("/tmp/episode/workspace"),
             write_video=True,
             headless=False,
         )
@@ -373,14 +374,8 @@ class NativeDriverConfigurationTest(unittest.TestCase):
         self.assertIn("/checkout/OmniGibson/omnigibson/eval/r1pro.yaml", command)
         self.assertIn("--write-video", command)
         self.assertIn("--no-headless", command)
-        self.assertEqual(
-            command[command.index("--verification-observation-workspace") + 1],
-            "/tmp/episode/workspace",
-        )
-        self.assertEqual(
-            command[command.index("--verification-publish-interval") + 1],
-            "5",
-        )
+        self.assertNotIn("--verification-observation-workspace", command)
+        self.assertNotIn("--verification-publish-interval", command)
         self.assertEqual(
             command[command.index("--env-wrapper") + 1],
             "omnigibson.eval.wrappers.RGBDFullResWrapper",
@@ -430,7 +425,7 @@ class NativeDriverConfigurationTest(unittest.TestCase):
 class OfficialResultBridgeTest(unittest.TestCase):
     def _write_result(self, root: Path, **overrides) -> Path:
         result = {
-            "task": contracts.TASK_NAME,
+            "task": TEST_TASK,
             "instance_id": 301,
             "rollout_id": 0,
             "steps": 6001,
@@ -446,7 +441,9 @@ class OfficialResultBridgeTest(unittest.TestCase):
     def test_running_status_is_owned_by_emerge_and_not_final(self) -> None:
         with TemporaryDirectory() as temporary:
             status_path = Path(temporary) / "workspace/BEHAVIOR_STATUS.json"
-            status = _write_running_evaluation_status(status_path)
+            status = _write_running_evaluation_status(
+                status_path, task_name=TEST_TASK
+            )
             self.assertEqual(status["source"], "emerge_supervisor")
             self.assertEqual(status["phase"], "running")
             self.assertIsNone(status["steps"])
@@ -459,7 +456,9 @@ class OfficialResultBridgeTest(unittest.TestCase):
             root = Path(temporary)
             result_path = self._write_result(root, success=True)
             status_path = root / "workspace/BEHAVIOR_STATUS.json"
-            status = _write_completed_evaluation_status(root, status_path)
+            status = _write_completed_evaluation_status(
+                root, status_path, task_name=TEST_TASK
+            )
             self.assertEqual(status["source"], "official_result")
             self.assertEqual(status["instance_id"], 301)
             self.assertEqual(status["steps"], 6001)
@@ -473,13 +472,13 @@ class OfficialResultBridgeTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             with self.assertRaises(RuntimeError):
-                _read_official_result(root)
+                _read_official_result(root, task_name=TEST_TASK)
             self._write_result(root)
             second = root / "json/turning_on_radio_302_0.json"
             second.write_text(
                 json.dumps(
                     {
-                        "task": contracts.TASK_NAME,
+                        "task": TEST_TASK,
                         "instance_id": 302,
                         "rollout_id": 0,
                         "steps": 1,
@@ -489,14 +488,14 @@ class OfficialResultBridgeTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaises(RuntimeError):
-                _read_official_result(root)
+                _read_official_result(root, task_name=TEST_TASK)
 
     def test_mismatched_or_invalid_official_result_is_rejected(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._write_result(root, task="storing_food")
             with self.assertRaises(RuntimeError):
-                _read_official_result(root)
+                _read_official_result(root, task_name=TEST_TASK)
 
 
 class EpisodeVerdictTest(unittest.TestCase):
@@ -646,8 +645,12 @@ class AgentWorkspacePreparationTest(unittest.TestCase):
     def test_preparation_uses_generic_skills_and_does_not_duplicate_instructions(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary) / "workspace"
-            _prepare_workspace(workspace)
-            _prepare_workspace(workspace)
+            _prepare_workspace(
+                workspace, task_name=TEST_TASK, instruction=TEST_PROMPT
+            )
+            _prepare_workspace(
+                workspace, task_name=TEST_TASK, instruction=TEST_PROMPT
+            )
             agents = (workspace / "AGENTS.md").read_text(encoding="utf-8")
             self.assertEqual(agents.count("BEHAVIOR-1K Evaluation Rules"), 1)
             self.assertEqual(agents.count("turning_on_radio execution contract"), 1)

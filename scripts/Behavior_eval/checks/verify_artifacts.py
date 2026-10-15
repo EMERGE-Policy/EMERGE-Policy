@@ -65,10 +65,8 @@ def verify(
     )
     check(phase != "error", f"the evaluator did not fail (phase={phase!r})")
     check(bool(status.get("done")), "the episode reached a final state (done=true)")
-    check(
-        str(status.get("task") or "") == contracts.TASK_NAME,
-        f"the evaluator ran {contracts.TASK_NAME} (task={status.get('task')!r})",
-    )
+    task_name = str(status.get("task") or "").strip()
+    check(bool(task_name), f"the evaluator recorded a task name (task={task_name!r})")
 
     success = bool(status.get("success"))
     if require_success:
@@ -159,7 +157,7 @@ def verify(
             "the agent episode result agrees with the official status on success",
         )
         check(
-            str(agent.get("task") or "") == contracts.TASK_NAME,
+            str(agent.get("task") or "") == task_name,
             "the agent episode result is for the same task",
         )
         check(

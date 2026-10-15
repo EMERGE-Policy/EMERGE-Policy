@@ -16,11 +16,18 @@ from robot.behavior import contracts
 from robot.behavior.r1pro_kinematics import R1ProKinematics
 from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
 
-PROMPT = contracts.OFFICIAL_PROMPT
+TASK_NAME = "turning_on_radio"
+PROMPT = "Turn on the radio receiver that's on the table in the living room."
 URDF = (
     Path(__file__).resolve().parents[3]
     / "third_party/behavior-1k/datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf"
 )
+
+
+def _make_driver(workspace: Path, **kwargs: Any) -> BehaviorR1ProDriver:
+    kwargs.setdefault("required_instruction", PROMPT)
+    kwargs.setdefault("expected_task", TASK_NAME)
+    return BehaviorR1ProDriver(workspace=workspace, **kwargs)
 
 
 class _FakeGateway:
@@ -155,7 +162,7 @@ class _FakeGateway:
 def _status_payload(**overrides: Any) -> dict[str, Any]:
     payload = {
         "schema_version": contracts.EVALUATION_STATUS_SCHEMA,
-        "task": contracts.TASK_NAME,
+        "task": TASK_NAME,
         "instance_id": 301,
         "rollout_id": 0,
         "phase": "running",
@@ -175,7 +182,7 @@ class BehaviorDriverContractTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.driver = BehaviorR1ProDriver(workspace=self.workspace, listen_port=0)
+        self.driver = _make_driver(self.workspace, listen_port=0)
         self.gateway = _FakeGateway()
         # Valid requests must reach a terminal execution state, not hang.
         self.gateway.execution["status"] = "step_completed"
@@ -269,8 +276,8 @@ class BehaviorDriverContractTest(unittest.TestCase):
 
     @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
     def test_move_to_pose_dispatches_a_bounded_local_trajectory(self) -> None:
-        driver = BehaviorR1ProDriver(
-            workspace=self.workspace,
+        driver = _make_driver(
+            self.workspace,
             listen_port=0,
             r1pro_urdf_path=URDF,
         )
@@ -299,8 +306,8 @@ class BehaviorDriverContractTest(unittest.TestCase):
 
     @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
     def test_bbox_move_to_pose_derives_a_precontact_target(self) -> None:
-        driver = BehaviorR1ProDriver(
-            workspace=self.workspace,
+        driver = _make_driver(
+            self.workspace,
             listen_port=0,
             r1pro_urdf_path=URDF,
         )
@@ -369,11 +376,11 @@ class BehaviorDriverContractTest(unittest.TestCase):
 
     def test_invalid_configuration_is_rejected_at_construction(self) -> None:
         with self.assertRaises(contracts.ConfigValidationError):
-            BehaviorR1ProDriver(workspace=self.workspace, max_action_steps=0)
+            _make_driver(self.workspace, max_action_steps=0)
         with self.assertRaises(contracts.ConfigValidationError):
-            BehaviorR1ProDriver(workspace=self.workspace, required_instruction="")
+            _make_driver(self.workspace, required_instruction="")
         with self.assertRaises(contracts.ConfigValidationError):
-            BehaviorR1ProDriver(workspace=self.workspace, execution_timeout_s=-1)
+            _make_driver(self.workspace, execution_timeout_s=-1)
 
 
 class BehaviorDriverReadinessTest(unittest.TestCase):
@@ -382,7 +389,7 @@ class BehaviorDriverReadinessTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.driver = BehaviorR1ProDriver(workspace=self.workspace, listen_port=0)
+        self.driver = _make_driver(self.workspace, listen_port=0)
         self.gateway = _FakeGateway()
         self.driver._gateway = self.gateway
 
@@ -453,8 +460,8 @@ class BehaviorDriverResultTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.driver = BehaviorR1ProDriver(
-            workspace=self.workspace, listen_port=0, state_sync_timeout_s=0.05
+        self.driver = _make_driver(
+            self.workspace, listen_port=0, state_sync_timeout_s=0.05
         )
         self.gateway = _FakeGateway()
         self.driver._gateway = self.gateway
@@ -567,7 +574,7 @@ class BehaviorDriverResultTest(unittest.TestCase):
                 "official_steps_available": True,
             },
         )
-        self.assertEqual(robot["evaluation"]["task"], contracts.TASK_NAME)
+        self.assertEqual(robot["evaluation"]["task"], TASK_NAME)
 
     def test_runtime_progress_accumulates_gateway_steps_without_claiming_official_steps(self) -> None:
         (self.workspace / "BEHAVIOR_STATUS.json").write_text(

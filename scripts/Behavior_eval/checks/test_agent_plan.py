@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.Behavior_eval.eval_behavior_agent import (
-    EVALUATION_INSTRUCTIONS,
     _agent_message,
+    _evaluation_instructions,
     _feedback_message,
 )
 from Emerge.agent.tools.embodied import EmbodiedActionTool
+from Emerge.agent.tools.filesystem import ReadFileTool
 from Emerge.agent.skills import SkillsLoader
 from scripts.Behavior_eval.runner_common import prepare_workspace
 
@@ -21,9 +23,30 @@ PROFILE = ROOT / "robot/profiles/behavior_r1pro.md"
 GENERIC_VLA = ROOT / "Emerge/skills/vla/SKILL.md"
 GENERIC_ATTACH = ROOT / "Emerge/skills/attach/SKILL.md"
 TASK_GUIDANCE = ROOT / "scripts/Behavior_eval/tasks/turning_on_radio.md"
+TEST_TASK = "turning_on_radio"
+TEST_PROMPT = "Turn on the radio receiver that's on the table in the living room."
 
 
 class BehaviorAgentPlanTest(unittest.TestCase):
+    def test_restricted_read_can_load_builtin_skills_but_not_other_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("private", encoding="utf-8")
+            tool = ReadFileTool(
+                workspace=workspace,
+                allowed_dir=workspace,
+                additional_allowed_dirs=(GENERIC_VLA.parents[1],),
+            )
+
+            skill = asyncio.run(tool.execute(str(GENERIC_VLA)))
+            denied = asyncio.run(tool.execute(str(outside)))
+
+            self.assertIn("active embodiment profile is authoritative", skill)
+            self.assertIn("outside allowed directory", denied)
+
     def test_workspace_does_not_shadow_generic_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = prepare_workspace(
@@ -56,17 +79,23 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         self.assertNotIn("Turning on the radio normally", profile)
 
     def test_runner_prompt_keeps_protocol_and_requires_the_task_contract(self) -> None:
-        self.assertIn("calibrated", EVALUATION_INSTRUCTIONS)
-        self.assertIn("object_location", EVALUATION_INSTRUCTIONS)
-        self.assertIn("move_to_pose", EVALUATION_INSTRUCTIONS)
-        self.assertIn("task execution contract", EVALUATION_INSTRUCTIONS)
-        self.assertIn("set_control_mode", EVALUATION_INSTRUCTIONS)
-        self.assertIn("base_motion_enabled == false", EVALUATION_INSTRUCTIONS)
-        self.assertNotIn("Follow the phased route", EVALUATION_INSTRUCTIONS)
-        initial = _agent_message(6002)
-        feedback = _feedback_message({"success": False}, 6002)
+        rules = _evaluation_instructions(TEST_TASK, TEST_PROMPT)
+        self.assertIn("calibrated", rules)
+        self.assertIn("object_location", rules)
+        self.assertIn("move_to_pose", rules)
+        self.assertIn("task-specific execution contract", rules)
+        self.assertIn("set_control_mode", rules)
+        self.assertIn("base_motion_enabled == false", rules)
+        self.assertNotIn("Follow the phased route", rules)
+        initial = _agent_message(
+            6002, task_name=TEST_TASK, task_instruction=TEST_PROMPT
+        )
+        feedback = _feedback_message(
+            {"success": False}, 6002, task_instruction=TEST_PROMPT
+        )
         self.assertIn("generic skills", initial)
-        self.assertIn("grasping and reorientation before localizing the button", initial)
+        self.assertIn(TEST_TASK, initial)
+        self.assertNotIn("localizing the button", initial)
         self.assertIn("Resume the current plan", feedback)
 
     def test_task_contract_delays_button_localization_until_after_reorientation(self) -> None:

@@ -7,7 +7,6 @@ never pull in numpy, PIL, msgpack, or websockets.
 The module owns three kinds of truth that used to be duplicated across the
 evaluation path:
 
-* the official instruction enforced by this initial task runner,
 * the shape rules for ``vla_execute`` parameters and for the driver
   configuration object, and
 * the classification of an episode's outcome.
@@ -20,8 +19,6 @@ import re
 from typing import Any
 
 BENCHMARK = "BEHAVIOR-1K"
-TASK_NAME = "turning_on_radio"
-OFFICIAL_PROMPT = "Turn on the radio receiver that's on the table in the living room."
 
 EVALUATION_STATUS_SCHEMA = "behavior.eval_status.v1"
 EVALUATION_PHASES = frozenset({"running", "completed", "error"})
@@ -142,6 +139,7 @@ _REQUIRED_CONFIG_FIELDS = (
     "upstream_url",
     "required_instruction",
     "max_action_steps",
+    "expected_task",
 )
 
 
@@ -248,6 +246,9 @@ def validate_driver_config(payload: Any) -> dict[str, Any]:
     required_instruction = normalize_instruction(raw["required_instruction"])
     if not required_instruction:
         raise ConfigValidationError("required_instruction must not be blank")
+    expected_task = str(raw["expected_task"]).strip()
+    if not expected_task:
+        raise ConfigValidationError("expected_task must not be blank")
 
     expected_instance_id = raw.get("expected_instance_id")
     if expected_instance_id is not None:
@@ -274,7 +275,7 @@ def validate_driver_config(payload: Any) -> dict[str, Any]:
         "execution_timeout_s": _positive_float(raw, "execution_timeout_s", 1800.0),
         "progress_timeout_s": _positive_float(raw, "progress_timeout_s", 300.0),
         "state_sync_timeout_s": _positive_float(raw, "state_sync_timeout_s", 120.0),
-        "expected_task": str(raw.get("expected_task", TASK_NAME)).strip() or TASK_NAME,
+        "expected_task": expected_task,
         "expected_instance_id": expected_instance_id,
     }
 

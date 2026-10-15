@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import contextlib
 import http
+import json
 import logging
 import math
 import threading
@@ -983,6 +984,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--controlled", action="store_true")
     parser.add_argument("--observation-workspace", type=Path)
     parser.add_argument("--observation-publish-interval", type=int, default=5)
+    parser.add_argument(
+        "--camera-calibration-config",
+        type=Path,
+        help="JSON file containing either camera_calibration or the calibration object itself.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -993,6 +999,15 @@ def main() -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    camera_calibration = None
+    if args.camera_calibration_config is not None:
+        config_path = args.camera_calibration_config.expanduser().resolve()
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"camera calibration config must be an object: {config_path}")
+        camera_calibration = payload.get("camera_calibration", payload)
+        if not isinstance(camera_calibration, dict):
+            raise ValueError(f"camera_calibration must be an object: {config_path}")
     gateway = B1KProxyGateway(
         upstream_url=args.upstream_url,
         listen_host=args.listen_host,
@@ -1001,6 +1016,7 @@ def main() -> None:
         controlled=args.controlled,
         observation_workspace=args.observation_workspace,
         observation_publish_interval=args.observation_publish_interval,
+        camera_calibration=camera_calibration,
     )
     gateway.serve_forever()
 

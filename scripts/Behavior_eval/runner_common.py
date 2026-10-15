@@ -9,7 +9,6 @@ import signal
 import socket
 import subprocess
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 from urllib import request as urllib_request
@@ -39,17 +38,6 @@ def require_executable(path: Path | str, label: str) -> Path:
     if not os.access(expanded, os.X_OK):
         raise PermissionError(f"{label} is not executable: {expanded}")
     return expanded
-
-
-def default_output_dir(label: str) -> Path:
-    """Return a fresh timestamped output directory.
-
-    Reusing an output directory is rejected, so the default must be unique per
-    invocation.  A stale ``BEHAVIOR_STATUS.json`` with ``done=true`` from an
-    earlier run is otherwise indistinguishable from this run's result.
-    """
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return WORKSPACE_ROOT / "outputs" / stamp
 
 
 def assert_fresh_output_dir(output_dir: Path, *, allow_existing: bool = False) -> Path:

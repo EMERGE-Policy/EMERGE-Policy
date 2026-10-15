@@ -44,7 +44,6 @@ class BehaviorR1ProDriver(BaseDriver):
     """Expose bounded BEHAVIOR R1Pro execution through the EMERGE action queue."""
 
     ROBOT_ID = "behavior_r1pro"
-    OFFICIAL_PROMPT = contracts.OFFICIAL_PROMPT
 
     def __init__(
         self,
@@ -54,7 +53,7 @@ class BehaviorR1ProDriver(BaseDriver):
         listen_host: str = "127.0.0.1",
         listen_port: int = 8000,
         upstream_open_timeout_s: float = 10.0,
-        required_instruction: str = OFFICIAL_PROMPT,
+        required_instruction: str = "",
         max_action_steps: int = 4000,
         status_path: str | Path | None = None,
         observation_publish_interval: int = 5,
@@ -65,7 +64,7 @@ class BehaviorR1ProDriver(BaseDriver):
         execution_timeout_s: float = 1800.0,
         progress_timeout_s: float = 300.0,
         state_sync_timeout_s: float = 120.0,
-        expected_task: str = contracts.TASK_NAME,
+        expected_task: str = "",
         expected_instance_id: int | None = None,
         **_kwargs: Any,
     ) -> None:

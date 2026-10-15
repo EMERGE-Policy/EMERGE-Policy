@@ -22,7 +22,6 @@ import msgpack
 import numpy as np
 
 from scripts.Behavior_eval.checks.test_driver import _FakeGateway
-from robot.behavior.contracts import OFFICIAL_PROMPT, TASK_NAME
 from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
 from scripts.Behavior_eval.runner_common import (
     prepare_workspace,
@@ -36,6 +35,9 @@ from Emerge.utils.action_queue import (
     update_action_document,
 )
 from robot.controller import _poll_once
+
+TASK_NAME = "turning_on_radio"
+OFFICIAL_PROMPT = "Turn on the radio receiver that's on the table in the living room."
 
 
 def _free_port() -> int:
@@ -132,6 +134,8 @@ class ControllerQueueIntegrationTest(unittest.TestCase):
             progress_timeout_s=10.0,
             execution_timeout_s=20.0,
             state_sync_timeout_s=3.0,
+            required_instruction=OFFICIAL_PROMPT,
+            expected_task=TASK_NAME,
         )
         self.driver.load_scene({})
         self.gateway_port = self.driver._gateway.listen_port
@@ -313,7 +317,12 @@ class ControllerCancellationIntegrationTest(unittest.TestCase):
         prepare_workspace(self.workspace, task_name=TASK_NAME, instruction=OFFICIAL_PROMPT)
         self.action_file = self.workspace / "ACTION.md"
         self.state_file = self.workspace / "ROBOT_STATE.md"
-        self.driver = BehaviorR1ProDriver(workspace=self.workspace, listen_port=0)
+        self.driver = BehaviorR1ProDriver(
+            workspace=self.workspace,
+            listen_port=0,
+            required_instruction=OFFICIAL_PROMPT,
+            expected_task=TASK_NAME,
+        )
         self.gateway = _CancelAwareGateway()
         self.driver._gateway = self.gateway
 

@@ -1,7 +1,8 @@
 .worktrees/
 .assets
 .env
-*.pyc
+.env.*
+!.env.example
 dist/
 build/
 *.egg-info/
@@ -20,10 +21,15 @@ poetry.lock
 .pytest_cache/
 botpy.log
 nano.*.save
-tests
-test
 .codex
 checkpoints
 .condaartifacts/
 artifacts/
+outputs/
+logs/
+*.log
+*.safetensors
+*.ckpt
+*.pth
+*.pt
 .DS_Store
