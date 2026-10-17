@@ -20,8 +20,10 @@ not need VGGT.
 
 The general runner contains no task name or task instruction. Those values
 come from `dev/behavior_agent_eval.json`, or from the `--task-name` and
-`--task-instruction` overrides. Optional task guidance belongs in
-`tasks/<task_name>.md`; `tasks/turning_on_radio.md` is the first example.
+`--task-instruction` overrides. It does not inject task-specific execution
+routes or schedule skill calls. Robot-specific action and evaluator contracts
+belong in `robot/profiles/behavior_r1pro.md`, which the Controller installs as
+the episode's `EMBODIED.md`; the Agent chooses when to use its skills.
 
 ## Output layout
 
@@ -155,10 +157,11 @@ configured limit. `--no-headless` opens the Isaac Sim window; omit it for
 headless execution.
 
 The Agent uses `~/.Emerge/config.json` unless `--config` is supplied. The
-runner requires the exact task instruction for every champion VLA call,
-supervises the native Controller and controlled gateway, and reads success
-only from the official result JSON. A completed action chunk is not itself
-task success.
+runner supervises the native Controller and controlled gateway, while the
+R1Pro driver enforces the champion checkpoint's fixed instruction on every
+VLA call. Skill choice and timing remain with the Agent. Success comes only
+from the official result JSON; a completed action chunk is not itself task
+success.
 
 ## Offline verification
 
@@ -185,8 +188,8 @@ Verify one finished active episode from its artifacts:
 - The evaluator is the unmodified pinned BEHAVIOR-1K checkout. EMERGE-specific
   observation publishing happens in the gateway, not in evaluator flags.
 - R1Pro is currently the supported robot. Task selection is generic, while a
-  task needs a champion checkpoint mapping and may optionally need its own
-  `tasks/<task_name>.md` guidance.
+  task needs a champion checkpoint mapping. The runner does not load
+  task-specific prompt files.
 - The shadow gateway preserves the websocket payload but its synchronous side
   copy adds observation decoding and periodic disk I/O. Compare shadow results
   with the direct champion baseline before enabling active control.

@@ -76,57 +76,6 @@ INFRASTRUCTURE_FINISH_REASONS = frozenset(
     }
 )
 
-def _evaluation_instructions(task_name: str, instruction: str) -> str:
-    """Return benchmark rules parameterized by the selected task."""
-    return f"""
-## BEHAVIOR-1K Evaluation Rules
-
-You control one R1Pro episode for `{task_name}` through the
-`behavior_r1pro` driver.
-
-- Plan from the current observation and task state using EMERGE's generic
-  planning, object-location, attach, VLA, and verification skills. If a
-  task-specific execution contract is appended below, follow it.
-- This checkpoint has a fixed episode instruction. For every `vla_execute`,
-  copy `robots.behavior_r1pro.effective_prompt` exactly; for this episode it is
-  `{instruction}`. Do not rewrite it as a phase-local prompt.
-- `step` is an action budget and must not exceed
-  `robots.behavior_r1pro.max_action_steps` in `ROBOT_STATE.md`.
-- Use bounded chunks and inspect `ROBOT_STATE.md` after every action.
-- Start approach in `navigation` mode. When the visual monitor verifies that
-  the target is in bimanual reach and no further base translation is needed,
-  call `set_control_mode` with `{{"mode": "manipulation"}}` before the next
-  contact or VLA action. Confirm `base_motion_enabled == false`; this keeps
-  OpenPI policy control of the trunk, arms, and grippers while forcing base
-  velocity to zero.
-- The authoritative completion signal is
-  `robots.behavior_r1pro.evaluation.success` together with
-  `robots.behavior_r1pro.evaluation.phase == "completed"`.
-- A `step_completed` action result only means the requested action budget was
-  consumed. It does not mean the task succeeded.
-- While the episode is running, `evaluation.steps` is null because stock
-  BEHAVIOR publishes its official counter only at completion. Use
-  `runtime_progress.gateway_action_steps` for live diagnosis; it is not an
-  official score.
-- `robots.behavior_r1pro.state_synced` tells you whether the simulator has been
-  confirmed to apply your last action. Do not judge progress while it is false.
-- `robots.behavior_r1pro.evaluation.phase == "error"` is an evaluator failure,
-  not a task failure.
-- Current camera views are listed in
-  `artifacts/observations/observation.json`. The manifest contains calibrated
-  224x224 intrinsics, base-relative camera transforms, and structured R1Pro
-  proprioception. Geometry actions may use only successful `object_location`
-  coordinates whose frame is `robot_base`.
-- `move_to_pose`, `move_linear`, `set_gripper`, and `hold_position` are native
-  R1Pro actions. Never invent a metric target; fall back to bounded VLA when a
-  control cannot be localized safely.
-- After a local motion, the gateway resets OpenPI before the next
-  `vla_execute`, forcing the policy to replan from the new observation.
-- Stop dispatching once `evaluation.done` is true and report the official
-  result.
-""".strip()
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--behavior-root", type=Path, default=EMERGE_ROOT / "third_party/behavior-1k")
@@ -272,20 +221,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def _prepare_workspace(workspace: Path, *, task_name: str, instruction: str) -> Path:
-    """Sync generic EMERGE templates, add benchmark rules, and reset the queue."""
+    """Sync generic EMERGE templates and reset the episode queue."""
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, silent=True)
-    agents_path = workspace / "AGENTS.md"
-    existing = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
-    if "BEHAVIOR-1K Evaluation Rules" not in existing:
-        rules = _evaluation_instructions(task_name, instruction)
-        existing = existing.rstrip() + "\n\n" + rules + "\n"
-    task_guidance_path = SCRIPT_DIR / "tasks" / f"{task_name}.md"
-    guidance_marker = f"## {task_name} execution contract"
-    if task_guidance_path.is_file() and guidance_marker not in existing:
-        guidance = task_guidance_path.read_text(encoding="utf-8").strip()
-        existing = existing.rstrip() + "\n\n" + guidance + "\n"
-    agents_path.write_text(existing, encoding="utf-8")
     prepare_workspace(workspace, task_name=task_name, instruction=instruction)
     return workspace
 
@@ -495,36 +433,24 @@ def _evaluator_command(
     return command
 
 
-def _agent_message(
-    max_action_steps: int, *, task_name: str, task_instruction: str
-) -> str:
+def _agent_message(*, task_instruction: str) -> str:
     return (
         "Complete this BEHAVIOR-1K simulated robot task:\n\n"
         f"{task_instruction}\n\n"
-        "Act autonomously through execute_robot_action. Use EMERGE's generic skills to "
-        f"plan from current evidence for `{task_name}`. Follow a task-specific execution "
-        "contract in AGENTS.md when one is available. "
-        "For every VLA call, copy robots.behavior_r1pro.effective_prompt exactly and "
-        f"request at most {max_action_steps} steps. Re-read fresh state after each action, "
-        "use measured geometry only when its preconditions hold, and change strategy after "
-        "repeated lack of progress. "
-        "Do not finish while official success is false unless the evaluator has terminated."
+        "Act autonomously through execute_robot_action. Follow the active "
+        "EMBODIED.md profile for robot-specific actions and ROBOT_STATE.md for "
+        "the official evaluator status."
     )
 
 
-def _feedback_message(
-    status: dict[str, Any], max_action_steps: int, *, task_instruction: str
-) -> str:
+def _feedback_message(status: dict[str, Any], *, task_instruction: str) -> str:
     return (
         "Your previous turn ended before the episode finished. The official BEHAVIOR "
-        "evaluator is still running, so continue the same episode and use "
-        "execute_robot_action again.\n\n"
+        "evaluator is still running; continue the same episode.\n\n"
         f"Task: {task_instruction}\n"
         f"Current evaluator status: {json.dumps(status, ensure_ascii=False)}\n"
-        f"Maximum steps per action: {max_action_steps}.\n\n"
-        "Inspect ROBOT_STATE.md, ACTION.md, the latest camera manifest, and PLAN.md before "
-        "acting. Resume the current plan; do not restart the rollout or repeat a failed "
-        "action without new evidence."
+        "Read the latest ROBOT_STATE.md before deciding what to do next. "
+        "Do not restart the rollout."
     )
 
 
@@ -973,11 +899,7 @@ def main() -> int:
             session_id = f"cli:behavior-{task_name.replace('_', '-')}-{uuid.uuid4().hex}"
             agent = _start_agent(
                 args=args,
-                message=_agent_message(
-                    max_action_steps,
-                    task_name=task_name,
-                    task_instruction=task_instruction,
-                ),
+                message=_agent_message(task_instruction=task_instruction),
                 session_id=session_id,
                 workspace=workspace,
                 environment=runtime_environment,
@@ -1069,7 +991,6 @@ def main() -> int:
                         args=args,
                         message=_feedback_message(
                             read_json(status_path),
-                            max_action_steps,
                             task_instruction=task_instruction,
                         ),
                         session_id=session_id,

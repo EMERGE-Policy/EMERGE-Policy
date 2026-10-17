@@ -9,7 +9,6 @@ from pathlib import Path
 
 from scripts.Behavior_eval.eval_behavior_agent import (
     _agent_message,
-    _evaluation_instructions,
     _feedback_message,
 )
 from Emerge.agent.tools.embodied import EmbodiedActionTool
@@ -21,9 +20,8 @@ from scripts.Behavior_eval.runner_common import prepare_workspace
 ROOT = Path(__file__).resolve().parents[3]
 PROFILE = ROOT / "robot/profiles/behavior_r1pro.md"
 GENERIC_VLA = ROOT / "Emerge/skills/vla/SKILL.md"
+GENERIC_PLANNING = ROOT / "Emerge/skills/planning/SKILL.md"
 GENERIC_ATTACH = ROOT / "Emerge/skills/attach/SKILL.md"
-TASK_GUIDANCE = ROOT / "scripts/Behavior_eval/tasks/turning_on_radio.md"
-TEST_TASK = "turning_on_radio"
 TEST_PROMPT = "Turn on the radio receiver that's on the table in the living room."
 
 
@@ -75,51 +73,29 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         self.assertIn("preserve the current wrist orientation", profile)
         self.assertIn("sole authoritative success signal", profile)
         self.assertIn("generic EMERGE skill", profile)
+        self.assertIn("effective_prompt", profile)
+        self.assertIn("Neither mode switch is", profile)
+        self.assertNotIn("After the visual verifier confirms", profile)
         self.assertNotIn("Required task route", profile)
         self.assertNotIn("Turning on the radio normally", profile)
 
-    def test_runner_prompt_keeps_protocol_and_requires_the_task_contract(self) -> None:
-        rules = _evaluation_instructions(TEST_TASK, TEST_PROMPT)
-        self.assertIn("calibrated", rules)
-        self.assertIn("object_location", rules)
-        self.assertIn("move_to_pose", rules)
-        self.assertIn("task-specific execution contract", rules)
-        self.assertIn("set_control_mode", rules)
-        self.assertIn("base_motion_enabled == false", rules)
-        self.assertNotIn("Follow the phased route", rules)
-        initial = _agent_message(
-            6002, task_name=TEST_TASK, task_instruction=TEST_PROMPT
-        )
-        feedback = _feedback_message(
-            {"success": False}, 6002, task_instruction=TEST_PROMPT
-        )
-        self.assertIn("generic skills", initial)
-        self.assertIn(TEST_TASK, initial)
-        self.assertNotIn("localizing the button", initial)
-        self.assertIn("Resume the current plan", feedback)
-
-    def test_task_contract_delays_button_localization_until_after_reorientation(self) -> None:
-        guidance = TASK_GUIDANCE.read_text(encoding="utf-8")
-        phases = (
-            "Locate the whole radio with the head RGB-D view",
-            "Approach the radio body",
-            "Grasp and reorient the radio",
-            "Verify the new pose",
-            "Relocalize the exposed button",
-            "Press and hold with the other arm",
-        )
-        positions = [guidance.index(phase) for phase in phases]
-        self.assertEqual(positions, sorted(positions))
-        normalized = " ".join(guidance.split())
-        self.assertIn("do not localize or press the button", normalized)
-        self.assertIn("changes from red to green", normalized)
-        self.assertIn("four verification views", normalized)
-        self.assertIn('{"mode": "manipulation"}', normalized)
+    def test_runner_messages_do_not_schedule_skills_or_actions(self) -> None:
+        initial = _agent_message(task_instruction=TEST_PROMPT)
+        feedback = _feedback_message({"success": False}, task_instruction=TEST_PROMPT)
+        self.assertIn(TEST_PROMPT, initial)
+        self.assertIn("EMBODIED.md", initial)
+        self.assertIn("official BEHAVIOR", feedback)
+        for message in (initial, feedback):
+            self.assertNotIn("object_location", message)
+            self.assertNotIn("set_control_mode", message)
+            self.assertNotIn("task-specific execution contract", message)
 
     def test_generic_vla_defers_fixed_prompt_semantics_to_the_embodiment(self) -> None:
         skill = GENERIC_VLA.read_text(encoding="utf-8")
         self.assertIn("active embodiment profile is authoritative", skill)
         self.assertIn("effective_prompt", skill)
+        planning = GENERIC_PLANNING.read_text(encoding="utf-8")
+        self.assertIn("If the embodiment requires a fixed episode instruction", planning)
 
     def test_agent_wait_budget_covers_generated_primitive_trajectories(self) -> None:
         self.assertGreaterEqual(

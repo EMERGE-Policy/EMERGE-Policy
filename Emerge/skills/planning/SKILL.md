@@ -23,8 +23,10 @@ For any multi-step embodied task, track progress in `PLAN.md`. It holds the whol
 2. **Recover context** — read `PLAN.md` first every turn and identify the current focus: the Branch Stack top when non-empty, otherwise the Pointer subgoal.
 3. **Bind the target** — keep the current Active Target and Intended Change in mind before choosing an action.
 4. **Act** — work only on the current focus. Choose rule actions or `vla_execute` at execution time according to the active embodiment guidance and the needs of the current phase.
-   When the plan has later subgoals, a `vla_execute` instruction must name only
-   the current focus and must not include those future subgoals.
+   When the plan has later subgoals and the active embodiment accepts
+   phase-local VLA instructions, name only the current focus and omit future
+   subgoals. If the embodiment requires a fixed episode instruction, use that
+   exact instruction and keep the current focus in the plan and reasoning.
 5. **Refresh robot state** — immediately after every `execute_robot_action` result, use `read_file` to read the current `ROBOT_STATE.md`. The copy in the original context is stale once the controller has executed an action. Perform this refresh before any PLAN update, visual verification, subagent call, or next robot action.
 6. **Check terminal state** — apply any environment-specific terminal-success rule first. A confirmed full-mission success ends the execution loop immediately; do not continue reasoning about subgoals or call another tool.
 7. **Reassess** — only when the full mission is not complete, compare the observed change with the current Done Criterion.

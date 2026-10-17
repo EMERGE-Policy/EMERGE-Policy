@@ -11,7 +11,8 @@ Use `vla_execute` for fine manipulation that benefits from continuous visual cor
 ## Before Execution
 
 Identify the current manipulation target and intended local change. Treat the
-complete task only as context; do not use it as the current VLA instruction.
+complete task only as context unless the active embodiment requires its fixed
+episode instruction for every VLA call.
 Preserve already acceptable task relations when continuing a multi-object task.
 
 Use VLA when the target is visible and the next phase involves adaptive alignment or contact. If the end-effector is far from an ordinary object and no pose-sensitive interaction is required, use attach for the coarse approach first.

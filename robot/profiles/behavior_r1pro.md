@@ -23,8 +23,8 @@ gateway status. Read both files again after every physical action.
 
 ### `vla_execute`
 
-Use the champion PI_BEHAVIOR policy for coarse whole-body navigation and
-visually sensitive contact:
+Calls the champion PI_BEHAVIOR policy, which can control whole-body motion and
+visually sensitive contact.
 
 This evaluation entrypoint uses the official episode instruction. Copy
 `robots.behavior_r1pro.effective_prompt` exactly into every `vla_execute` call;
@@ -103,8 +103,8 @@ The episode starts in whole-body `navigation` mode:
 {"mode": "navigation"}
 ```
 
-After the visual verifier confirms that the target is in manipulation range
-and no further base translation is needed, switch at the action boundary:
+The Agent may switch at an action boundary when it decides that base translation
+should be disabled for the next action:
 
 ```json
 {"mode": "manipulation"}
@@ -113,11 +113,10 @@ and no further base translation is needed, switch at the action boundary:
 In `manipulation` mode the gateway forces the first three entries of every
 official 23-D policy action (base x/y/yaw velocity) to zero. Trunk, both arms,
 and both grippers remain controlled by the OpenPI policy. The transition resets
-OpenPI so
-the next VLA call replans from the current observation. Check
-`control_mode` and `base_motion_enabled` in `ROBOT_STATE.md` before
-contact. Return to `navigation` only when fresh verification shows that the
-target is outside manipulation range and base repositioning is required.
+OpenPI so the next VLA call replans from the current observation. Check
+`control_mode` and `base_motion_enabled` in `ROBOT_STATE.md` after a switch.
+Switching back to `navigation` restores base control. Neither mode switch is
+required at a predetermined task phase.
 
 `gateway_status` is read-only. `attach` is a generic EMERGE skill that composes
 the supported `move_to_pose`, `move_linear`, and `set_gripper` actions; it is
@@ -137,4 +136,7 @@ was consumed and synchronized with the simulator. It does not mean the task
 succeeded. The sole authoritative success signal is
 `evaluation.success == true` together with `evaluation.phase == "completed"`.
 Stop immediately when `evaluation.done` is true. Treat `evaluation.phase ==
-"error"` as an evaluator failure.
+"error"` as an evaluator failure. While the episode is running,
+`evaluation.steps` is unavailable; `runtime_progress.gateway_action_steps`
+is a live diagnostic counter, not the official score. Check `state_synced`
+before judging the result of the most recent action.
