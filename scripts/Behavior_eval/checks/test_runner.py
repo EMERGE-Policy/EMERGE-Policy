@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -17,7 +19,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from Emerge.utils.action_queue import append_action, update_action_document
 from robot.behavior import contracts
@@ -29,13 +31,18 @@ from scripts.Behavior_eval.eval_behavior_agent import (
     _actions_settled,
     _episode_driver_config,
     _evaluator_command,
+    _gracefully_stop_evaluator,
     _prepare_workspace,
+    _render_navigation_video,
+    _navigation_summary,
     _read_official_result,
     _resume_decision,
     _validate_behavior_perception,
     _validate_external_openpi,
+    _validate_lightnav,
     _write_completed_evaluation_status,
     _write_running_evaluation_status,
+    NAVIGATION_PROFILE,
     parse_args,
 )
 from scripts.Behavior_eval.runner_common import (
@@ -87,6 +94,20 @@ class RunnerCliTest(unittest.TestCase):
         self.assertIsNone(args.output_dir)
         self.assertIsNone(args.task_name)
         self.assertIsNone(args.task_instruction)
+        self.assertFalse(args.navigation_only)
+        self.assertIsNone(args.navigation_goal)
+
+    def test_navigation_mode_is_explicit_and_can_open_simulator_window(self) -> None:
+        with patch.object(sys, "argv", [
+            "eval_behavior_agent.py", "--navigation-only",
+            "--navigation-goal", "Approach the radio", "--max-steps", "900",
+            "--no-headless",
+        ]):
+            args = parse_args()
+        self.assertTrue(args.navigation_only)
+        self.assertEqual(args.navigation_goal, "Approach the radio")
+        self.assertEqual(args.max_steps, 900)
+        self.assertFalse(args.headless)
 
     def test_native_config_name_and_live_options_are_accepted(self) -> None:
         with patch.object(
@@ -124,6 +145,58 @@ class RunnerCliTest(unittest.TestCase):
         self.assertTrue(args.preflight_only)
 
 
+class NavigationVideoShutdownTest(unittest.TestCase):
+    def test_navigation_summary_counts_all_segments_not_only_the_last(self) -> None:
+        calls = [{"nav_steps": 30, "model_frames": 4, "finish_reason": "step_budget"},
+                 {"nav_steps": 15, "model_frames": 3, "finish_reason": "model_stop_candidate"}]
+        result = _navigation_summary({"navigation_calls": calls, "last_navigation": calls[-1]})
+        self.assertEqual(result["nav_steps"], 45)
+        self.assertEqual(result["model_frames"], 7)
+        self.assertEqual(result["call_count"], 2)
+        self.assertNotIn("success", result)
+        self.assertIsNone(_navigation_summary({}))
+
+    def test_evaluator_receives_sigint_before_waiting(self) -> None:
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        self.assertTrue(_gracefully_stop_evaluator(process, timeout_s=3.0))
+        self.assertEqual(process.mock_calls[:3], [
+            unittest.mock.call.poll(),
+            unittest.mock.call.send_signal(signal.SIGINT),
+            unittest.mock.call.wait(timeout=3.0),
+        ])
+
+    def test_evaluator_timeout_allows_existing_force_cleanup(self) -> None:
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = subprocess.TimeoutExpired("evaluator", 0.01)
+        self.assertFalse(_gracefully_stop_evaluator(process, timeout_s=0.01))
+
+    def test_navigation_frames_produce_playable_mp4(self) -> None:
+        if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+            self.skipTest("ffmpeg and ffprobe are required")
+        from PIL import Image
+
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            frames = output_dir / "lightnav_frames"
+            frames.mkdir()
+            for index in range(2):
+                Image.new("RGB", (32, 32), (200, index * 100, 0)).save(
+                    frames / f"frame_{index:05d}.jpg"
+                )
+            output = _render_navigation_video(frames, output_dir)
+            self.assertEqual(output, output_dir / "navigation_head.mp4")
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1", str(output)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            self.assertIn("duration=", probe.stdout)
+
+
 class PerceptionPreflightTest(unittest.TestCase):
     def test_behavior_requires_rgbd_geometry_mode(self) -> None:
         from Emerge.config.schema import Config
@@ -142,6 +215,27 @@ class PerceptionPreflightTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "SAM3 is not healthy"):
                 _validate_behavior_perception(Config())
+
+    def test_complete_task_can_run_vla_without_optional_segmentation(self) -> None:
+        from Emerge.config.schema import Config
+
+        with patch("scripts.Behavior_eval.eval_behavior_agent.service_health_ok", return_value=False):
+            self.assertEqual(
+                _validate_behavior_perception(Config(), required=False), "ws://localhost:8002"
+            )
+
+    def test_lightnav_is_optional_for_complete_task_but_required_for_nav_debug(self) -> None:
+        with patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient",
+                   side_effect=ConnectionRefusedError("test server is offline")):
+            self.assertFalse(_validate_lightnav(required=False))
+            with self.assertRaisesRegex(RuntimeError, "LightNav is unavailable"):
+                _validate_lightnav(required=True)
+
+    def test_lightnav_preflight_checks_protocol_without_predicting(self) -> None:
+        with patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient") as factory:
+            self.assertTrue(_validate_lightnav(required=False))
+            factory.return_value.__enter__.assert_called_once()
+            factory.return_value.predict.assert_not_called()
 
     def test_healthy_sam3_passes(self) -> None:
         from Emerge.config.schema import Config
@@ -272,6 +366,27 @@ class PortAndOutputDirectoryTest(unittest.TestCase):
 
 
 class NativeDriverConfigurationTest(unittest.TestCase):
+    def test_navigation_only_uses_an_episode_profile_and_action_guard(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = _episode_driver_config(
+                {
+                    "workspace": "unused", "upstream_url": "ws://127.0.0.1:1",
+                    "required_instruction": TEST_PROMPT, "max_action_steps": 1,
+                    "expected_task": TEST_TASK,
+                },
+                output_dir=root, workspace=root / "workspace",
+                status_path=root / "workspace/BEHAVIOR_STATUS.json",
+                upstream_port=8123, gateway_port=8124,
+                max_action_steps=900, state_sync_timeout_s=45.0,
+                task_name=TEST_TASK, task_instruction=TEST_PROMPT,
+                navigation_only=True,
+            )
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(config["navigation_only"])
+        self.assertEqual(config["profile_path"], str(NAVIGATION_PROFILE))
+        self.assertEqual(config["max_action_steps"], 900)
+
     def test_episode_config_targets_the_native_driver_and_workspace(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -302,6 +417,8 @@ class NativeDriverConfigurationTest(unittest.TestCase):
             self.assertEqual(config["max_action_steps"], 20_002)
             self.assertEqual(config["status_path"], str(status_path))
             self.assertEqual(config["expected_task"], TEST_TASK)
+            self.assertFalse(config["navigation_only"])
+            self.assertIsNone(config["profile_path"])
 
     def test_behavior_driver_is_registered_without_a_plugin(self) -> None:
         from robot.drivers import DRIVER_REGISTRY

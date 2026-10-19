@@ -21,3 +21,4 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `image` | Capture images and save to workspace |
 | `attach` | Rule-based robot control (geometry-driven motion primitives) |
 | `vla` | VLA policy control (natural language instructions) |
+| `lightnav` | Optional natural-language navigation through an embodiment's `navigate_vln` action |

@@ -9,12 +9,18 @@ from pathlib import Path
 
 from scripts.Behavior_eval.eval_behavior_agent import (
     _agent_message,
+    _agent_runtime_config,
     _feedback_message,
+    NAVIGATION_PROFILE,
+    NAVIGATION_SKILL,
 )
 from Emerge.agent.tools.embodied import EmbodiedActionTool
 from Emerge.agent.tools.filesystem import ReadFileTool
 from Emerge.agent.skills import SkillsLoader
 from scripts.Behavior_eval.runner_common import prepare_workspace
+from Emerge.runtime.protocol import RunRequest
+from Emerge.runtime.configuration import load_runtime_config
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -65,19 +71,39 @@ class BehaviorAgentPlanTest(unittest.TestCase):
             "move_linear",
             "set_gripper",
             "hold_position",
-            "set_control_mode",
+            "navigate_vln",
+            "adjust_posture",
         ):
             with self.subTest(action=action):
                 self.assertIn(f"`{action}`", profile)
-        self.assertIn("Switching back to the OpenPI policy resets its action chunk", profile)
-        self.assertIn("preserve the current wrist orientation", profile)
+        self.assertIn("Switching back to the OpenPI policy invalidates only its", profile)
+        self.assertIn("stage, stage-voting history, policy state and counters are preserved", profile)
+        self.assertIn("precise motion preserves the current wrist orientation", profile)
+        self.assertIn("is a soft preference", profile)
+        self.assertIn("With false or omitted, the original exact-pose IK checks remain unchanged", profile)
         self.assertIn("sole authoritative success signal", profile)
         self.assertIn("generic EMERGE skill", profile)
         self.assertIn("effective_prompt", profile)
-        self.assertIn("Neither mode switch is", profile)
+        self.assertNotIn("`set_control_mode`", profile)
+        self.assertIn("all 23 action dimensions", profile)
         self.assertNotIn("After the visual verifier confirms", profile)
         self.assertNotIn("Required task route", profile)
         self.assertNotIn("Turning on the radio normally", profile)
+
+    def test_lightnav_is_a_builtin_skill_for_complete_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = prepare_workspace(
+                Path(temporary), task_name="example_task", instruction="do the task"
+            )
+            loader = SkillsLoader(workspace)
+            self.assertEqual(loader.load_skill("lightnav"), NAVIGATION_SKILL.read_text(encoding="utf-8"))
+            item = next(s for s in loader.list_skills() if s["name"] == "lightnav")
+            self.assertEqual(item["source"], "builtin")
+            skill = loader.load_skill("lightnav")
+            self.assertNotIn("do not use the champion VLA", skill)
+            self.assertNotIn("This mission ends with", skill)
+            self.assertIn("use VLA", skill)
+            self.assertNotIn("set_control_mode", str(EmbodiedActionTool(workspace).parameters))
 
     def test_runner_messages_do_not_schedule_skills_or_actions(self) -> None:
         initial = _agent_message(task_instruction=TEST_PROMPT)
@@ -98,6 +124,7 @@ class BehaviorAgentPlanTest(unittest.TestCase):
         self.assertIn("If the embodiment requires a fixed episode instruction", planning)
 
     def test_agent_wait_budget_covers_generated_primitive_trajectories(self) -> None:
+        self.assertGreaterEqual(EmbodiedActionTool._result_timeout("adjust_posture", {}), 600.0)
         self.assertGreaterEqual(
             EmbodiedActionTool._result_timeout("move_to_pose", {}),
             600.0,
@@ -106,6 +133,29 @@ class BehaviorAgentPlanTest(unittest.TestCase):
             EmbodiedActionTool._result_timeout("set_gripper", {"steps": 15}),
             60.0,
         )
+        self.assertGreaterEqual(
+            EmbodiedActionTool._result_timeout("navigate_vln", {"max_wall_time_s": 300}),
+            300.0,
+        )
+
+    def test_navigation_only_prompt_uses_profile_and_skill(self) -> None:
+        message = _agent_message(
+            task_instruction=TEST_PROMPT,
+            navigation_goal="Navigate to the radio and stop",
+        )
+        self.assertIn("Navigate to the radio and stop", message)
+        self.assertNotIn(TEST_PROMPT, message)
+        self.assertIn("navigate_vln", NAVIGATION_PROFILE.read_text(encoding="utf-8"))
+        self.assertIn("navigate_vln", NAVIGATION_SKILL.read_text(encoding="utf-8"))
+
+    def test_navigation_request_disables_only_visual_monitor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_file = Path(temporary) / "config.json"
+            config_file.write_text('{"visual_monitor":{"enabled":true}}', encoding="utf-8")
+            args = SimpleNamespace(agent_config=config_file, agent_model=None, navigation_only=True)
+            config = _agent_runtime_config(args)
+            self.assertFalse(config.visual_monitor.enabled)
+            self.assertTrue(load_runtime_config(RunRequest(message="test", config=str(config_file))).visual_monitor.enabled)
 
 
 if __name__ == "__main__":

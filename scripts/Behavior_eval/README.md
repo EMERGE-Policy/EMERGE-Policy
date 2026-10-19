@@ -13,9 +13,10 @@ first as a read-only shadow gateway and later as the active controller.
 | Champion policy | `third_party/behavior-1k-solution/.venv` | Modified OpenPI / PI_BEHAVIOR inference on port 8011 |
 | EMERGE | this repository, `phyagentos` | Gateway, observations, Agent and Controller |
 | SAM3 | `third_party/sam3`, `EmergePolicy` | Prompt-guided segmentation on port 8002 |
+| LightNav | `third_party/lightnav-0`, `/data/yxy/envs/lightnav` | Optional navigation inference on port 8051 |
 
 The default ports are EMERGE gateway `8000`, VGGT `8001`, SAM3 `8002`, and
-champion OpenPI `8011`. BEHAVIOR uses calibrated RGB-D, so the normal path does
+champion OpenPI `8011`, and LightNav `8051`. BEHAVIOR uses calibrated RGB-D, so the normal path does
 not need VGGT.
 
 The general runner contains no task name or task instruction. Those values
@@ -100,6 +101,58 @@ missing instances.
 
 ## Stage 3: read-only EMERGE shadow
 
+### Current Agent vs champion: radio public 10
+
+Run the current, unmodified Agent entrypoint sequentially on `public_test`
+indices 0–9 (instance IDs 301–310), one rollout each:
+
+```bash
+cd /data/yxy/EMERGE-Humanoid
+bash scripts/Behavior_eval/run_radio_agent_public10.sh
+```
+
+Keep the existing champion checkpoint-2, SAM3 and optional LightNav services
+running as usual, and do not run another evaluator on gateway port 8000.
+This Bash wrapper does not launch model services or change policy/profile
+logic. It uses `gpt-6.1-sol`, the official default task step limit, 3600 seconds
+wall time per episode, video recording, and the same GUI setting as the latest
+single-instance experiment. Pass `--headless` to hide simulator windows.
+Keep code, profiles, model checkpoints and service settings fixed across all ten.
+
+New results are separate from earlier tuning runs:
+
+```text
+/data/yxy/outputs/Emerge/turning_on_radio/public10/
+├── instance_301/   # json/, videos/, logs/, workspace/, agent_episode_result.json
+├── instance_302/
+└── ... instance_310/
+```
+
+Compare the exact same IDs with
+`/data/yxy/outputs/champion_baseline/turning_on_radio/json/`. Earlier successful
+debugging episodes are not substituted into this new cohort. Report official
+successes out of ten, mean final Q-score, and both all-episode and success-only
+steps; infrastructure failures are reported separately, not silently omitted.
+
+Rerunning skips only identity-checked episodes with both an official result and
+a clean completed episode summary. Official `success: false` is a completed
+experiment and is also skipped. Incomplete/invalid existing directories are
+preserved and reported without overwriting; inspect and move that instance
+directory aside before retrying it. Ctrl+C stops the batch after the current
+runner handles interruption; it does not schedule the next instance. End-of-run
+statistics describe only completed episodes until all ten are present.
+`EMERGE_RADIO_OUTPUT_DIR` can select another cohort root; `EMERGE_AGENT_PYTHON`
+and `EMERGE_AGENT_MODEL` can select another Agent runtime/model, but must remain
+fixed within a comparison cohort.
+
+For the active navigation/body-observation experiment, see
+[`integrations/lightnav_behavior/README.md`](../../integrations/lightnav_behavior/README.md#agent-guided-navigation-and-body-observation).
+It reuses `eval_behavior_agent.py --navigation-only`. The Agent may choose
+multiple VLN calls, bounded torso/arm posture changes, and visual/location
+subagents. Navigation and posture share one total simulator-step budget;
+the runner records every call and the full official video. This adds active
+observation, not automatic collision avoidance or verified arrival.
+
 Run one instance through the EMERGE gateway without an Agent or Controller:
 
 ```bash
@@ -116,6 +169,28 @@ JSON, video and logs stay under the same `shadow/` tree. This stage calls no
 LLM and is the first end-to-end integration check.
 
 ## Active EMERGE Agent
+
+Complete-task runs expose both the built-in `Emerge/skills/lightnav/SKILL.md`
+and the existing VLA skill through the normal skill loader. The Agent chooses
+when to call `navigate_vln` or `vla_execute`; the runner does not impose a
+navigation-first sequence or a handoff point. Do **not** pass
+`--navigation-only` for a complete task. That flag remains a separate debug
+experiment that disables VLA and uses the navigation profile.
+
+For navigation, start this service in another terminal:
+
+```bash
+/data/yxy/envs/lightnav/bin/lightnav-serve \
+  --task vln --backend hf --aspect_mode keep \
+  --model_path /data/yxy/checkpoints/lightnav-0 --port 8051
+```
+
+Only the champion server is mandatory for complete-task startup. Preflight
+checks LightNav and SAM3 and reports unavailable optional services; their
+absence does not block VLA. LightNav is mandatory for `--navigation-only`.
+SAM3 is needed only if the Agent invokes object localization, not for VLA,
+VLN, or ordinary visual verification. To start the champion alone, use
+`BEHAVIOR_SERVICES=openpi bash scripts/Behavior_eval/start_behavior_services.sh`.
 
 First run a preflight. It does not start Isaac Sim or call the LLM:
 
@@ -163,9 +238,46 @@ VLA call. Skill choice and timing remain with the Agent. Success comes only
 from the official result JSON; a completed action chunk is not itself task
 success.
 
+There is no `navigation`/`manipulation` control-mode switch or
+`set_control_mode` action. Champion observations and all 23 VLA action
+dimensions are relayed unchanged, including base velocities. The checkpoint,
+fixed task instruction, robot config, RGB-D wrapper, and official scoring
+remain the same as the champion baseline. Consecutive VLA calls preserve the
+policy's internal state and normal action cache. After VLN/local motion the
+gateway sends `{"invalidate_action_cache": true}` before the next VLA
+observation. This clears only old actions, their index and rolling-inpainting
+seeds; task ID, current stage, voting history, counters and base-policy state
+are preserved. The next action is inferred from fresh observations. Official
+`{"reset": true}` still starts a new episode with the original full reset;
+task changes retain their original stage-reset behavior. No model weights,
+stage definitions or correction rules are changed. External movement and
+fresh action planning still differ from uninterrupted baseline execution.
+
+Restart the champion service after this update. The handshake must advertise
+`emerge_capabilities.invalidate_action_cache: true`. A legacy server can
+still serve plain VLA, but a local-motion handoff is rejected explicitly;
+there is no fallback to resetting the task stage. Baseline clients need no
+new flag and keep their normal observation/action/reset protocol.
+
+Complete-task `agent_episode_result.json` also records `navigation_calls`,
+`navigation.nav_steps`, `posture_calls`, `total_robot_action_steps`, and
+`upstream_cache_invalidations_sent` and `evaluator_resets_forwarded` as separate
+counts for handoff cache invalidations and official full resets. The old,
+ambiguous `upstream_resets_sent` field is removed. Raw actions and Agent
+decisions remain in `workspace/ACTION.md`, `logs/agent.log`, and
+`agent_runs/<run_id>/events.jsonl`. Official JSON/video remain under `json/`
+and `videos/`. If a run ends before the evaluator does, the runner first
+requests a graceful stop so video writers can close; this does not turn an
+interrupted episode into official success.
+
 ## Offline verification
 
 The full integration test suite needs neither Isaac Sim nor an LLM:
+
+When the champion `.venv` is installed, the suite also runs ten CPU-only
+checks against the real wrapper and request handler, with fake inference and
+no model weights. Without that environment the cross-environment check is
+reported as skipped, not as a successful champion validation.
 
 ```bash
 cd /data/yxy/EMERGE-Humanoid

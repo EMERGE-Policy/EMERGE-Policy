@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import msgpack
 import numpy as np
@@ -98,6 +100,45 @@ class ObservationPublisherTest(unittest.TestCase):
             self.assertEqual(manifest["episode_id"], 1)
             self.assertTrue(manifest["captured_at"].endswith("Z"))
             self.assertEqual(manifest["revision"], 1)
+
+    def test_immediate_publish_waits_for_in_progress_capture(self) -> None:
+        """The navigation thread must not race the first automatic publish."""
+        with TemporaryDirectory() as temporary:
+            publisher = self._publisher(Path(temporary))
+            entered = threading.Event()
+            release = threading.Event()
+            forced_finished = threading.Event()
+            original_publish = publisher._publish_latest_locked
+
+            def delayed_publish():
+                entered.set()
+                if not release.wait(timeout=2):
+                    raise TimeoutError("test did not release the first publish")
+                return original_publish()
+
+            def force_publish():
+                publisher.publish_latest()
+                forced_finished.set()
+
+            with patch.object(publisher, "_publish_latest_locked", side_effect=delayed_publish):
+                capture_thread = threading.Thread(target=publisher.capture, args=(_camera_message(),))
+                force_thread = threading.Thread(target=force_publish)
+                capture_thread.start()
+                try:
+                    self.assertTrue(entered.wait(timeout=2))
+                    force_thread.start()
+                    self.assertFalse(forced_finished.wait(timeout=0.05))
+                finally:
+                    release.set()
+                    capture_thread.join(timeout=2)
+                    if force_thread.ident is not None:
+                        force_thread.join(timeout=2)
+            self.assertFalse(capture_thread.is_alive())
+            self.assertFalse(force_thread.is_alive())
+            self.assertTrue(forced_finished.is_set())
+            self.assertIsNone(publisher.last_error)
+            self.assertEqual(publisher.observation_count, 1)
+            self.assertEqual(publisher.revision, 2)
 
     def test_image_paths_are_revision_specific_and_pruned(self) -> None:
         with TemporaryDirectory() as temporary:

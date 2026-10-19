@@ -255,6 +255,10 @@ def validate_driver_config(payload: Any) -> dict[str, Any]:
         if isinstance(expected_instance_id, bool) or not isinstance(expected_instance_id, int):
             raise ConfigValidationError("expected_instance_id must be an integer or null")
 
+    navigation_only = raw.get("navigation_only", False)
+    if not isinstance(navigation_only, bool):
+        raise ConfigValidationError("navigation_only must be a boolean")
+
     listen_host = str(raw.get("listen_host", "127.0.0.1")).strip() or "127.0.0.1"
     return {
         "workspace": str(raw["workspace"]),
@@ -277,6 +281,7 @@ def validate_driver_config(payload: Any) -> dict[str, Any]:
         "state_sync_timeout_s": _positive_float(raw, "state_sync_timeout_s", 120.0),
         "expected_task": expected_task,
         "expected_instance_id": expected_instance_id,
+        "navigation_only": navigation_only,
     }
 
 

@@ -21,4 +21,6 @@ def load_runtime_config(request: RunRequest) -> Config:
         config.agents.defaults.max_tool_iterations = request.max_iterations
     if request.restrict_to_workspace is not None:
         config.tools.restrict_to_workspace = request.restrict_to_workspace
+    if request.visual_monitor_enabled is not None:
+        config.visual_monitor.enabled = request.visual_monitor_enabled
     return config

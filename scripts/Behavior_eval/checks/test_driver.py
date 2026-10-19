@@ -8,12 +8,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scipy.spatial.transform import Rotation
 
 from robot.behavior import contracts
 from robot.behavior.r1pro_kinematics import R1ProKinematics
+from robot.behavior.r1pro_motion import MotionPlan
 from robot.drivers.behavior_r1pro_driver import BehaviorR1ProDriver
 
 TASK_NAME = "turning_on_radio"
@@ -40,8 +41,6 @@ class _FakeGateway:
             "requests_forwarded": 0,
             "evaluator_connected": True,
             "upstream_connected": True,
-            "control_mode": "navigation",
-            "base_motion_enabled": True,
             **state,
         }
         # A dispatched execution reaches a terminal state rather than hanging.
@@ -86,15 +85,6 @@ class _FakeGateway:
 
     def snapshot(self) -> dict[str, Any]:
         return {**self.state, "execution": self.execution}
-
-    def set_control_mode(self, mode: str) -> bool:
-        normalized = str(mode).strip().lower()
-        if normalized not in {"navigation", "manipulation"}:
-            raise ValueError("control mode must be one of: manipulation, navigation")
-        changed = normalized != self.state["control_mode"]
-        self.state["control_mode"] = normalized
-        self.state["base_motion_enabled"] = normalized == "navigation"
-        return changed
 
     def begin_execution(
         self, instruction: str, requested_steps: int, *, baseline_evaluator_steps=None
@@ -231,31 +221,240 @@ class BehaviorDriverContractTest(unittest.TestCase):
     def test_unknown_action_type_is_reported(self) -> None:
         self.assertIn("Unknown action type", self.driver.execute_action("follow_arc", {}))
 
-    def test_set_control_mode_locks_and_unlocks_the_base(self) -> None:
-        locked = self.driver.execute_action(
-            "set_control_mode", {"mode": "manipulation"}
+    def test_navigation_only_blocks_champion_and_other_physical_actions(self) -> None:
+        self.driver._navigation_only = True
+        for action_type, parameters in (
+            ("vla_execute", {"instruction": PROMPT, "step": 1}),
+            ("hold_position", {"step": 1}),
+            ("move_to_pose", {"side": "left", "position_m": [0.5, 0.0, 1.0]}),
+        ):
+            with self.subTest(action_type=action_type):
+                result = self.driver.execute_action(action_type, parameters)
+                self.assertIn("disabled in this navigation-only experiment", result)
+        self.assertIsNone(self.gateway.local_action_seen)
+        self.assertIn("Gateway status", self.driver.execute_action("gateway_status", {}))
+
+    def test_navigation_only_requires_boolean_configuration(self) -> None:
+        with self.assertRaises(contracts.ConfigValidationError):
+            _make_driver(self.workspace, navigation_only="yes")
+
+    def test_navigation_only_uses_existing_local_gateway_action_path(self) -> None:
+        self.driver._navigation_only = True
+        self.gateway.execution["completed_steps"] = 7
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        websocket = MagicMock()
+
+        def exercise_loop(**kwargs):
+            self.assertEqual(kwargs["instruction"], "Approach the radio")
+            frame = kwargs["frame_source"]()
+            self.assertEqual(frame.observation_seq, 1)
+            outcome = kwargs["execute_waypoint"]((0.0875, 0.0, 0.0), 7)
+            self.assertEqual(outcome["completed_steps"], 7)
+            return {"finish_reason": "model_stop_candidate", "nav_steps": 7}
+
+        frame = SimpleNamespace(observation_seq=1, episode_id=1, jpeg=b"frame")
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", return_value=frame), \
+             patch("integrations.lightnav_behavior.closed_loop.run_closed_loop", side_effect=exercise_loop), \
+             patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient", return_value=websocket):
+            result = self.driver.execute_action(
+                "navigate_vln", {"instruction": "Approach the radio", "max_steps": 7}
+            )
+        self.assertIn("model_stop_candidate", result)
+        self.assertIsNotNone(self.gateway.local_action_seen)
+        self.assertEqual(self.gateway.local_action_seen[3:], [0.0] * 20)
+        self.assertEqual(self.driver.last_navigation_result["nav_steps"], 7)
+
+    def test_navigation_calls_reuse_history_and_share_the_episode_budget(self) -> None:
+        self.driver._navigation_only = True
+        self.driver.max_action_steps = 14
+        self.gateway.execution["completed_steps"] = 7
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        client = MagicMock()
+        seen = []
+
+        def segment(**kwargs):
+            seen.append((kwargs["client"], kwargs["instruction"], kwargs["call_id"]))
+            kwargs["frame_source"]()
+            kwargs["execute_waypoint"]((0.08, 0.0, 0.0), 7)
+            return {"finish_reason": "model_stop_candidate", "nav_steps": 7, "model_frames": 1}
+
+        frames = [SimpleNamespace(observation_seq=i, episode_id=1, jpeg=b"frame") for i in (1, 8)]
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", side_effect=frames), \
+             patch("integrations.lightnav_behavior.closed_loop.run_closed_loop", side_effect=segment), \
+             patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient", return_value=client) as factory:
+            for instruction in ("approach", "use another route"):
+                result = self.driver.execute_action("navigate_vln", {"instruction": instruction, "max_steps": 7})
+                self.assertFalse(result.startswith("Failed:"), result)
+            self.assertIn("exhausted", self.driver.execute_action("navigate_vln", {"instruction": "again", "max_steps": 1}))
+        self.assertEqual(factory.call_count, 1)
+        client.connect.assert_called_once()
+        self.assertEqual(seen, [(client, "approach", 1), (client, "use another route", 2)])
+        self.assertFalse(self.driver._navigation_results[0]["history_continued"])
+        self.assertTrue(self.driver._navigation_results[1]["history_continued"])
+        self.assertEqual(self.driver.get_runtime_state()["robots"]["behavior_r1pro"]["remaining_action_steps"], 0)
+        self.driver.close()
+        client.close.assert_called_once()
+
+    def test_complete_task_can_alternate_vln_and_fixed_prompt_vla(self) -> None:
+        self.assertFalse(self.driver._navigation_only)
+        self.gateway.execution["completed_steps"] = 7
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        client = MagicMock()
+        frame = SimpleNamespace(observation_seq=1, episode_id=1, jpeg=b"frame")
+
+        def segment(**kwargs):
+            kwargs["frame_source"]()
+            outcome = kwargs["execute_waypoint"]((0.08, 0.0, 0.0), 7)
+            return {"finish_reason": "step_budget", "nav_steps": outcome["completed_steps"]}
+
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", return_value=frame), \
+             patch("integrations.lightnav_behavior.closed_loop.run_closed_loop", side_effect=segment), \
+             patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient", return_value=client):
+            for instruction in ("Approach the object", "Reposition beside the table"):
+                nav = self.driver.execute_action("navigate_vln", {"instruction": instruction, "max_steps": 7})
+                self.assertIn("Navigation segment finished", nav)
+                vla = self.driver.execute_action("vla_execute", {"instruction": PROMPT, "step": 7})
+                self.assertIn("VLA execution finished", vla)
+                self.assertEqual(self.gateway.execution["instruction"], PROMPT)
+        self.assertEqual(len(self.driver._navigation_results), 2)
+        self.assertTrue(self.driver._navigation_results[-1]["history_continued"])
+        self.assertEqual(self.driver._gateway_action_steps, 28)
+        rewritten = self.driver.execute_action("vla_execute", {"instruction": "press the button", "step": 7})
+        self.assertTrue(rewritten.startswith("Failed:"), rewritten)
+        self.driver.close()
+
+    def test_navigation_resets_history_when_episode_changes(self) -> None:
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        frames = [SimpleNamespace(observation_seq=1, episode_id=i, jpeg=b"frame") for i in (1, 2)]
+        clients = [MagicMock(), MagicMock()]
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", side_effect=frames), \
+             patch("integrations.lightnav_behavior.closed_loop.run_closed_loop",
+                   side_effect=lambda **kw: {"finish_reason": "model_stop_candidate", "nav_steps": 0}), \
+             patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient", side_effect=clients):
+            for _ in frames:
+                self.driver.execute_action("navigate_vln", {"instruction": "approach", "max_steps": 7})
+        clients[0].close.assert_called_once()
+        self.assertFalse(self.driver._navigation_results[-1]["history_continued"])
+        self.driver.close()
+
+    @unittest.skipUnless(URDF.is_file(), "official R1Pro URDF required")
+    def test_navigation_posture_navigation_preserves_history_and_all_frames(self) -> None:
+        self.driver._navigation_only = True
+        self.driver.max_action_steps = 40
+        self.driver._kinematics = R1ProKinematics(URDF)
+        state = self.gateway.robot_state
+
+        def update_geometry():
+            for side in ("left", "right"):
+                state["arms"][side]["eef_position"] = self.driver._kinematics.forward(
+                    side, state["trunk"]["qpos"], state["arms"][side]["qpos"]
+                )[:3, 3].tolist()
+
+        update_geometry()
+        self.gateway.hold_action[3:7] = state["trunk"]["qpos"]
+        self.gateway.observation_count = 1
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        begin_local = self.gateway.begin_local_execution
+
+        def begin(label, steps, action, **kwargs):
+            self.gateway.execution["completed_steps"] = steps
+            return begin_local(label, steps, action, **kwargs)
+
+        self.gateway.begin_local_execution = begin
+
+        def applied():
+            self.gateway.observation_count += self.gateway.execution["completed_steps"]
+            if self.gateway.execution["instruction"].startswith("adjust_posture"):
+                self.gateway.hold_action = self.gateway.local_trajectory_seen[-1].copy()
+                state["trunk"]["qpos"] = self.gateway.hold_action[3:7]
+                update_geometry()
+
+        self.gateway.wait_hook = applied
+        client = MagicMock()
+        client.predict.return_value = SimpleNamespace(
+            first_waypoint=(0.08, 0.0, 0.0), stop=False, visible=False, latency_ms=1.0,
         )
-        self.assertIn("base motion is locked", locked)
-        self.assertEqual(self.gateway.state["control_mode"], "manipulation")
-        self.assertFalse(self.gateway.state["base_motion_enabled"])
-
-        unlocked = self.driver.execute_action(
-            "set_control_mode", {"mode": "navigation"}
+        frame = lambda _manifest: SimpleNamespace(
+            jpeg=b"frame", observation_seq=self.gateway.observation_count, episode_id=1,
         )
-        self.assertIn("base motion is enabled", unlocked)
-        self.assertTrue(self.gateway.state["base_motion_enabled"])
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", side_effect=frame), \
+             patch("integrations.lightnav_sonic_emerge.bridge.lightnav_ws.LightNavWsClient", return_value=client) as factory:
+            first = self.driver.execute_action("navigate_vln", {"instruction": "search", "max_steps": 7})
+            pose = self.driver.execute_action("adjust_posture", {
+                "joint_deltas_rad": {"torso_joint4": 0.1}, "max_steps": 25,
+            })
+            second = self.driver.execute_action("navigate_vln", {"instruction": "approach", "max_steps": 7})
+        for result in (first, pose, second):
+            self.assertFalse(result.startswith("Failed:"), result)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual([call.args[1] for call in client.predict.call_args_list], ["search", "approach"])
+        self.assertTrue(self.driver.last_navigation_result["history_continued"])
+        self.assertAlmostEqual(self.gateway.local_action_seen[6], 0.1)
+        self.assertEqual(self.driver._gateway_action_steps, 34)
+        self.assertEqual(self.driver._remaining_steps(), 6)
+        frames = sorted((self.workspace / "lightnav_frames").glob("*.jpg"))
+        self.assertEqual(len(frames), 5)
+        records = [json.loads(line) for line in (self.workspace / "lightnav_trace.jsonl").read_text().splitlines()]
+        self.assertEqual(len(records), 5)
+        self.assertEqual(records[2]["event"], "posture_completed")
+        self.assertEqual(records[-1]["call_id"], 2)
+        self.driver.close()
 
-    def test_set_control_mode_rejects_invalid_parameters(self) -> None:
-        for params in (None, {}, {"mode": "unsafe"}, {"mode": "navigation", "step": 1}):
-            with self.subTest(params=params):
-                result = self.driver.execute_action("set_control_mode", params)
-                self.assertTrue(result.startswith("Failed:"), result)
+    @unittest.skipUnless(URDF.is_file(), "official R1Pro URDF required")
+    def test_posture_uses_measured_joint_state_and_reports_tracking_failure(self) -> None:
+        self.driver._navigation_only = True
+        self.driver._kinematics = R1ProKinematics(URDF)
+        state = self.gateway.robot_state
+        for side in ("left", "right"):
+            pose = self.driver._kinematics.forward(side, state["trunk"]["qpos"], state["arms"][side]["qpos"])
+            state["arms"][side]["eef_position"] = pose[:3, 3].tolist()
+        self.gateway.hold_action[3:7] = state["trunk"]["qpos"]
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        frame = SimpleNamespace(observation_seq=21, episode_id=1, jpeg=b"posture")
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", return_value=frame):
+            # A completed action budget is not proof that the joints followed.
+            result = self.driver.execute_action("adjust_posture", {
+                "joint_deltas_rad": {"torso_joint4": 0.1}, "max_steps": 30,
+            })
+        self.assertTrue(result.startswith("Failed:"), result)
+        self.assertIn("actual posture differs", result)
+        self.assertTrue(all(action[:3] == [0.0, 0.0, 0.0] for action in self.gateway.local_trajectory_seen))
+        record = self.driver._posture_results[-1]
+        self.assertAlmostEqual(record["max_joint_tracking_error_rad"], 0.1)
+        self.assertEqual(record["actual_body_posture"]["joint_positions_rad"]["torso_joint4"], 0.0)
+        self.assertTrue(Path(record["image_path"]).is_file())
+        self.assertEqual(self.driver._gateway_action_steps, len(self.gateway.local_trajectory_seen))
 
-    def test_runtime_state_exposes_the_control_boundary(self) -> None:
-        self.driver.execute_action("set_control_mode", {"mode": "manipulation"})
+    @unittest.skipUnless(URDF.is_file(), "official R1Pro URDF required")
+    def test_posture_success_publishes_actual_pose_and_consumes_shared_budget(self) -> None:
+        self.driver._navigation_only = True
+        self.driver._kinematics = R1ProKinematics(URDF)
+        state = self.gateway.robot_state
+        for side in ("left", "right"):
+            state["arms"][side]["eef_position"] = self.driver._kinematics.forward(
+                side, state["trunk"]["qpos"], state["arms"][side]["qpos"]
+            )[:3, 3].tolist()
+        self.gateway.hold_action[3:7] = state["trunk"]["qpos"]
+        self.gateway.publish_observation = lambda: self.workspace / "observation.json"
+        self.gateway.wait_hook = lambda: state["trunk"]["qpos"].__setitem__(3, 0.1)
+        frame = SimpleNamespace(observation_seq=21, episode_id=1, jpeg=b"posture")
+        with patch("integrations.lightnav_behavior.probe.load_head_frame", return_value=frame):
+            result = self.driver.execute_action("adjust_posture", {
+                "joint_deltas_rad": {"torso_joint4": 0.1}, "max_steps": 30,
+            })
+        self.assertTrue(result.startswith("Posture execution finished:"), result)
+        self.assertTrue(self.driver._posture_results[-1]["pose_reached"])
+        before = self.driver._gateway_action_steps
+        self.driver.max_action_steps = before
+        self.assertIn("exhausted", self.driver.execute_action("adjust_posture", {"joint_deltas_rad": {"torso_joint4": 0.1}}))
+
+    def test_removed_control_mode_is_not_supported_or_advertised(self) -> None:
+        result = self.driver.execute_action("set_control_mode", {"mode": "manipulation"})
+        self.assertIn("Unknown action type", result)
         robot = self.driver.get_runtime_state()["robots"]["behavior_r1pro"]
-        self.assertEqual(robot["control_mode"], "manipulation")
-        self.assertFalse(robot["base_motion_enabled"])
+        self.assertNotIn("control_mode", robot)
+        self.assertNotIn("base_motion_enabled", robot)
+        self.assertNotIn("control_mode", self.driver.execute_action("gateway_status", {}))
 
     def test_hold_position_uses_the_gateway_local_action(self) -> None:
         result = self.driver.execute_action("hold_position", {"step": 2})
@@ -295,13 +494,15 @@ class BehaviorDriverContractTest(unittest.TestCase):
         target = kinematics.forward("left", trunk, target_qpos)[:3, 3].tolist()
 
         result = driver.execute_action(
-            "move_to_pose", {"side": "left", "position_m": target}
+            "move_to_pose", {"side": "left", "position_m": target, "steps": 40, "settle_steps": 10}
         )
 
         self.assertTrue(result.startswith("Move-to-pose execution finished:"), result)
         self.assertIsNotNone(gateway.local_trajectory_seen)
         trajectory = gateway.local_trajectory_seen or []
         self.assertGreater(len(trajectory), 1)
+        self.assertEqual(len(trajectory), 50)
+        self.assertTrue(all(action == trajectory[-1] for action in trajectory[-10:]))
         self.assertTrue(all(len(action) == 23 for action in trajectory))
 
     @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
@@ -332,11 +533,13 @@ class BehaviorDriverContractTest(unittest.TestCase):
                 "bbox_world_min_m": bbox_min,
                 "bbox_world_max_m": bbox_max,
                 "standoff_m": 0.08,
+                "steps": 40,
             },
         )
 
         self.assertTrue(result.startswith("Move-to-pose execution finished:"), result)
         self.assertTrue(gateway.local_trajectory_seen)
+        self.assertEqual(len(gateway.local_trajectory_seen), 40)
 
     def test_bbox_move_requires_both_bounds(self) -> None:
         self.driver._kinematics = object()
@@ -367,12 +570,117 @@ class BehaviorDriverContractTest(unittest.TestCase):
         ) as planner:
             result = self.driver.execute_action(
                 "move_linear",
-                {"side": "right", "delta_m": [0.0, 0.0, 0.08]},
+                {"side": "right", "delta_m": [0.0, 0.0, 0.08], "steps": 30, "settle_steps": 20},
             )
 
         self.assertTrue(result.startswith("Linear execution finished:"), result)
         self.assertEqual(planner.call_args.kwargs["delta_m"], [0.0, 0.0, 0.08])
         self.assertIsNone(planner.call_args.kwargs["position_m"])
+        self.assertEqual(planner.call_args.kwargs["steps"], 30)
+        self.assertEqual(planner.call_args.kwargs["settle_steps"], 20)
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_attach_linear_timing_reaches_the_gateway_with_real_ik(self) -> None:
+        driver = _make_driver(self.workspace, listen_port=0, r1pro_urdf_path=URDF)
+        gateway = _FakeGateway()
+        kinematics = R1ProKinematics(URDF)
+        for side in ("left", "right"):
+            pose = kinematics.forward(side, gateway.robot_state["trunk"]["qpos"], [0.0] * 7)
+            gateway.robot_state["arms"][side]["eef_position"] = pose[:3, 3].tolist()
+            gateway.robot_state["arms"][side]["eef_orientation_xyzw"] = Rotation.from_matrix(pose[:3, :3]).as_quat().tolist()
+        driver._gateway = gateway
+        result = driver.execute_action(
+            "move_linear", {"side": "right", "delta_m": [0.01, 0.0, 0.0], "steps": 30, "settle_steps": 20},
+        )
+        self.assertTrue(result.startswith("Linear execution finished:"), result)
+        trajectory = gateway.local_trajectory_seen
+        self.assertIsNotNone(trajectory)
+        self.assertEqual(len(trajectory), 50)
+        self.assertTrue(all(action == trajectory[-1] for action in trajectory[-20:]))
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_invalid_motion_timing_cannot_dispatch_a_trajectory(self) -> None:
+        driver = _make_driver(self.workspace, listen_port=0, r1pro_urdf_path=URDF)
+        gateway = _FakeGateway()
+        driver._gateway = gateway
+        for action, params in (
+            ("move_to_pose", {"side": "left", "position_m": [0.1, 0.2, 0.3]}),
+            ("move_linear", {"side": "right", "delta_m": [0.01, 0.0, 0.0]}),
+        ):
+            for timing in ({"steps": True}, {"steps": 0}, {"settle_steps": -1}, {"steps": 230, "settle_steps": 20}, {"stepz": 40}):
+                with self.subTest(action=action, timing=timing):
+                    result = driver.execute_action(action, {**params, **timing})
+                    self.assertTrue(result.startswith("Failed:"), result)
+                    self.assertIsNone(gateway.local_trajectory_seen)
+
+    def _kinematic_driver(self):
+        driver = _make_driver(self.workspace, listen_port=0, r1pro_urdf_path=URDF)
+        gateway = _FakeGateway()
+        kinematics = R1ProKinematics(URDF)
+        trunk = gateway.robot_state["trunk"]["qpos"]
+        gateway.hold_action[3:7] = trunk
+        for side in ("left", "right"):
+            pose = kinematics.forward(side, trunk, [0.0] * 7)
+            gateway.robot_state["arms"][side]["eef_position"] = pose[:3, 3].tolist()
+            gateway.robot_state["arms"][side]["eef_orientation_xyzw"] = Rotation.from_matrix(pose[:3, :3]).as_quat().tolist()
+        driver._gateway = gateway
+        return driver, gateway, kinematics
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_coarse_direct_target_dispatches_and_reports_a_distinct_reachable_endpoint(self) -> None:
+        driver, gateway, kinematics = self._kinematic_driver()
+        requested = [1.5, 0.3, 0.6]
+        result = driver.execute_action("move_to_pose", {"side": "left", "position_m": requested, "coarse": True})
+        self.assertTrue(result.startswith("Move-to-pose execution finished:"), result)
+        report = json.loads(result.split("Coarse approach plan: ", 1)[1])
+        self.assertEqual(report["requested_position_m"], requested)
+        self.assertEqual(report["side"], "left")
+        self.assertEqual(report["frame"], "robot_base")
+        self.assertGreater(report["remaining_distance_m"], 0.01)
+        self.assertFalse(report["collision_checked"])
+        self.assertNotIn("measured_position_m", report)
+        endpoint = kinematics.forward("left", gateway.robot_state["trunk"]["qpos"], gateway.local_trajectory_seen[-1][7:14])[:3, 3]
+        self.assertLess(sum((a - b) ** 2 for a, b in zip(endpoint, report["planned_reachable_position_m"])), 1e-12)
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_coarse_bbox_dispatches_with_explicit_left_hand(self) -> None:
+        driver, gateway, _ = self._kinematic_driver()
+        left = gateway.robot_state["arms"]["left"]["eef_position"]
+        result = driver.execute_action("move_to_pose", {
+            "side": "left", "coarse": True, "steps": 40,
+            "bbox_world_min_m": [left[0] - 0.03, left[1] - 0.03, left[2] - 0.13],
+            "bbox_world_max_m": [left[0] + 0.03, left[1] + 0.03, left[2] - 0.07],
+            "standoff_m": 0.08,
+        })
+        self.assertTrue(result.startswith("Move-to-pose execution finished:"), result)
+        report = json.loads(result.split("Coarse approach plan: ", 1)[1])
+        self.assertEqual(report["side"], "left")
+        self.assertEqual(len(gateway.local_trajectory_seen), 40)
+
+    @unittest.skipUnless(URDF.is_file(), f"official R1Pro URDF not found at {URDF}")
+    def test_coarse_rejects_invalid_flag_and_endpoint_inside_object_without_dispatch(self) -> None:
+        driver, gateway, _ = self._kinematic_driver()
+        invalid = driver.execute_action("move_to_pose", {"side": "left", "position_m": [0.4, 0.3, 0.6], "coarse": "true"})
+        self.assertIn("coarse must be a boolean", invalid)
+        self.assertIsNone(gateway.local_trajectory_seen)
+        plan = MotionPlan(((0.0,) * 23,), 0.0, "coarse fixture", {
+            "planned_reachable_position_m": [0.5, 0.0, 0.5],
+        })
+        with patch("robot.drivers.behavior_r1pro_driver.plan_move_to_pose", return_value=plan) as planner:
+            result = driver.execute_action("move_to_pose", {
+                "side": "left", "coarse": True,
+                "bbox_world_min_m": [0.4, -0.1, 0.4],
+                "bbox_world_max_m": [0.6, 0.1, 0.6],
+            })
+            self.assertTrue(planner.call_args.kwargs["coarse"])
+        self.assertIn("inside the measured object box", result)
+        self.assertIsNone(gateway.local_trajectory_seen)
+
+    def test_move_linear_does_not_accept_approximate_motion(self) -> None:
+        self.driver._kinematics = object()
+        result = self.driver.execute_action("move_linear", {"side": "left", "delta_m": [0.01, 0, 0], "coarse": True})
+        self.assertIn("unknown parameters: coarse", result)
+        self.assertIsNone(self.gateway.local_trajectory_seen)
 
     def test_invalid_configuration_is_rejected_at_construction(self) -> None:
         with self.assertRaises(contracts.ConfigValidationError):

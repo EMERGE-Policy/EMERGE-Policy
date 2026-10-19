@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import copy
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -222,6 +223,10 @@ class ObservationPublisher:
         self.keep_revisions = max(1, int(keep_revisions))
         self.camera_calibration = camera_calibration
         self.manifest_path = self.workspace / "artifacts/observations/observation.json"
+        # Capture runs in the gateway thread while navigation may request an
+        # immediate publish from another thread.  They must never write the
+        # same revision/temporary paths concurrently.
+        self._lock = threading.RLock()
         self._observation_count = 0
         self._revision = 0
         self._episode_id = 0
@@ -240,7 +245,8 @@ class ObservationPublisher:
     @property
     def observation_count(self) -> int:
         """Monotonic count of every decoded observation frame."""
-        return self._observation_count
+        with self._lock:
+            return self._observation_count
 
     @property
     def revision(self) -> int:
@@ -253,6 +259,10 @@ class ObservationPublisher:
 
     def note_reset(self) -> None:
         """Start a new episode; frames from the previous one must not leak."""
+        with self._lock:
+            self._note_reset_locked()
+
+    def _note_reset_locked(self) -> None:
         self._episode_id += 1
         self._latest = {}
         self._latest_depths = {}
@@ -266,6 +276,10 @@ class ObservationPublisher:
     # -- ingest ------------------------------------------------------------- #
 
     def capture(self, message: Any) -> None:
+        with self._lock:
+            self._capture_locked(message)
+
+    def _capture_locked(self, message: Any) -> None:
         if not isinstance(message, (bytes, bytearray, memoryview)):
             return
         try:
@@ -334,6 +348,10 @@ class ObservationPublisher:
     # -- publish ------------------------------------------------------------ #
 
     def publish_latest(self) -> Path | None:
+        with self._lock:
+            return self._publish_latest_locked()
+
+    def _publish_latest_locked(self) -> Path | None:
         if not self._latest:
             return None
         revision = self._revision + 1

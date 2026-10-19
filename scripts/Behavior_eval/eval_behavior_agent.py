@@ -12,6 +12,8 @@ import argparse
 import copy
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -62,6 +64,8 @@ DEFAULT_ROBOT_CONFIG = EMERGE_ROOT / "dev/behavior_r1pro_openpi.yaml"
 DEFAULT_GATEWAY_PORT = 8000
 DEFAULT_OPENPI_PORT = 8011
 BEHAVIOR_RGBD_WRAPPER = "omnigibson.eval.wrappers.RGBDFullResWrapper"
+NAVIGATION_PROFILE = EMERGE_ROOT / "robot/profiles/behavior_r1pro_navigation.md"
+NAVIGATION_SKILL = EMERGE_ROOT / "Emerge/skills/lightnav/SKILL.md"
 
 #: Agent finish reasons that indicate the framework, not the task, is broken.
 INFRASTRUCTURE_FINISH_REASONS = frozenset(
@@ -144,6 +148,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--instance-index", type=int, default=0)
+    parser.add_argument(
+        "--navigation-only", action="store_true",
+        help="Use the normal EMERGE loop for VLN navigation and bounded body-posture observation actions.",
+    )
+    parser.add_argument(
+        "--navigation-goal",
+        help="Navigation objective shown to the Agent; required with --navigation-only.",
+    )
     parser.add_argument(
         "--max-steps",
         type=int,
@@ -258,6 +270,7 @@ def _episode_driver_config(
     task_name: str,
     task_instruction: str,
     r1pro_urdf_path: Path | None = None,
+    navigation_only: bool = False,
 ) -> Path:
     """Write one episode-local config, following the native LIBERO runner."""
     config = copy.deepcopy(base_config)
@@ -275,8 +288,11 @@ def _episode_driver_config(
             "expected_task": task_name,
             "expected_instance_id": None,
             "r1pro_urdf_path": str(r1pro_urdf_path) if r1pro_urdf_path else None,
+            "navigation_only": navigation_only,
         }
     )
+    if navigation_only:
+        config["profile_path"] = str(NAVIGATION_PROFILE)
     normalized = validate_driver_config(config)
     path = output_dir / "driver_config.json"
     atomic_write_json(path, normalized)
@@ -433,7 +449,14 @@ def _evaluator_command(
     return command
 
 
-def _agent_message(*, task_instruction: str) -> str:
+def _agent_message(*, task_instruction: str, navigation_goal: str | None = None) -> str:
+    if navigation_goal is not None:
+        return (
+            "Your BEHAVIOR navigation mission is:\n\n"
+            f"{navigation_goal}\n\n"
+            "Act through the normal EMERGE robot action tool. Follow EMBODIED.md "
+            "and the LightNav navigation skill."
+        )
     return (
         "Complete this BEHAVIOR-1K simulated robot task:\n\n"
         f"{task_instruction}\n\n"
@@ -468,6 +491,7 @@ def _agent_runtime_config(args: argparse.Namespace):
             else None
         ),
         "model": args.agent_model,
+        "visual_monitor_enabled": False if args.navigation_only else None,
     }
     return load_runtime_config(RunRequest.model_validate(request))
 
@@ -521,7 +545,7 @@ def _validate_agent_provider(args: argparse.Namespace, config=None) -> str:
     return selected_model
 
 
-def _validate_behavior_perception(config) -> str:
+def _validate_behavior_perception(config, *, required: bool = True) -> str:
     """Ensure this RGB-D benchmark cannot silently fall back to the wrong geometry."""
     perception = config.subagents.object_location
     if perception.geometry_backend == "vggt":
@@ -536,7 +560,31 @@ def _validate_behavior_perception(config) -> str:
         f"SAM3 is not healthy at {sam3_url}. Start the local SAM3 service using "
         "the command in scripts/Behavior_eval/README.md"
     )
-    raise RuntimeError(message)
+    if required:
+        raise RuntimeError(message)
+    print(f"Optional object-location service unavailable: {message}", flush=True)
+    return sam3_url
+
+
+def _validate_lightnav(*, required: bool) -> bool:
+    """Navigation is an optional skill, not a prerequisite for champion VLA."""
+    from integrations.lightnav_sonic_emerge.bridge.lightnav_ws import LightNavWsClient
+    from websockets.exceptions import WebSocketException
+
+    try:
+        with LightNavWsClient(
+            "ws://127.0.0.1:8051", client_id="emerge-behavior-navigation-preflight",
+            request_timeout_s=15.0,
+        ):
+            pass
+    except (OSError, TimeoutError, RuntimeError, WebSocketException) as exc:
+        message = f"LightNav is unavailable at ws://127.0.0.1:8051: {exc}"
+        if required:
+            raise RuntimeError(message) from exc
+        print(f"Optional navigation skill unavailable; VLA remains available. {message}", flush=True)
+        return False
+    print("LightNav service ready on port 8051", flush=True)
+    return True
 
 
 def _validate_external_openpi(port: int) -> str:
@@ -570,6 +618,8 @@ def _start_agent(
         "restrict_to_workspace": True,
         "stream": False,
     }
+    if args.navigation_only:
+        request["visual_monitor_enabled"] = False
     if args.agent_max_iterations is not None:
         request["max_iterations"] = args.agent_max_iterations
     if args.agent_config is not None:
@@ -686,6 +736,65 @@ def _settle_agent(
     _record_agent_result(agent, results)
 
 
+def _gracefully_stop_evaluator(process: subprocess.Popen[bytes] | None, *, timeout_s: float = 90.0) -> bool:
+    """Let the official evaluator flush and close its PyAV MP4 writer.
+
+    BEHAVIOR handles SIGINT by calling BatchedEvaluator.__exit__, whereas the
+    generic process-group cleanup sends SIGTERM and can leave an MP4 without
+    its final moov atom. The generic cleanup still runs afterward as a backstop.
+    """
+    if process is None:
+        return False
+    if process.poll() is not None:
+        return True
+    try:
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        return False
+    except ProcessLookupError:
+        return process.poll() is not None
+    return True
+
+
+def _render_navigation_video(frame_dir: Path, output_dir: Path) -> Path | None:
+    """Save a playable head-camera clip even when the official rollout stops early."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None or not (frame_dir / "frame_00000.jpg").is_file():
+        return None
+    output = output_dir / "navigation_head.mp4"
+    partial = output_dir / "navigation_head.partial.mp4"
+    result = subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-framerate", "4",
+            "-i", str(frame_dir / "frame_%05d.jpg"), "-c:v", "libx264",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(partial),
+        ],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    if result.returncode != 0 or not partial.is_file():
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"could not render navigation video: {result.stderr.strip()}")
+    partial.replace(output)
+    return output
+
+
+def _navigation_summary(progress: dict[str, Any]) -> dict[str, Any] | None:
+    """Aggregate all segments without converting execution completion to arrival."""
+    calls = progress.get("navigation_calls") or []
+    if not calls:
+        last = progress.get("last_navigation")
+        calls = [last] if isinstance(last, dict) else []
+    if not calls:
+        return None
+    return {
+        **calls[-1],
+        "nav_steps": sum(int(call.get("nav_steps") or 0) for call in calls),
+        "model_frames": sum(int(call.get("model_frames") or 0) for call in calls),
+        "call_count": len(calls),
+    }
+
+
 def _actions_settled(workspace: Path) -> bool:
     """True when no action is pending or running in the real queue."""
     action_file = workspace / "ACTION.md"
@@ -775,11 +884,25 @@ def main() -> int:
             "task instruction is required: set required_instruction in --driver-config "
             "or pass --task-instruction"
         )
+    navigation_goal = str(args.navigation_goal or "").strip()
+    if args.navigation_only:
+        if not navigation_goal:
+            raise ValueError("--navigation-goal is required with --navigation-only")
+        if args.max_steps is None:
+            raise ValueError("--max-steps is required with --navigation-only")
+        if args.require_success:
+            raise ValueError("--require-success is not meaningful for navigation-only runs")
+        require_path(NAVIGATION_PROFILE, "navigation-only R1Pro profile")
+    elif navigation_goal:
+        raise ValueError("--navigation-goal requires --navigation-only")
     runtime_config = _agent_runtime_config(args)
     agent_model = _validate_agent_provider(args, runtime_config)
     print(f"EMERGE Agent provider ready for model: {agent_model}", flush=True)
-    sam3_url = _validate_behavior_perception(runtime_config)
-    print(f"EMERGE perception ready: RGB-D geometry + SAM3 at {sam3_url}", flush=True)
+    require_path(NAVIGATION_SKILL, "built-in LightNav skill")
+    lightnav_ready = _validate_lightnav(required=args.navigation_only)
+    # Neither navigation nor segmentation is mandatory for a complete task:
+    # the Agent chooses skills, while champion VLA requires only its own server.
+    sam3_url = _validate_behavior_perception(runtime_config, required=False)
     openpi_url = _validate_external_openpi(args.upstream_port)
     print(f"OpenPI service ready: {openpi_url}", flush=True)
     robot_config = require_path(args.robot_config, "R1Pro OpenPI evaluation config")
@@ -788,14 +911,18 @@ def main() -> int:
     if args.preflight_only:
         print(
             "BEHAVIOR preflight passed: "
-            f"task={task_name}, OpenPI={openpi_url}, SAM3={sam3_url}, "
+            f"task={task_name}, OpenPI={openpi_url}, "
+            f"LightNav={'ready' if lightnav_ready else 'unavailable (optional)'}, SAM3={sam3_url}, "
             f"BEHAVIOR={behavior_root}, "
             f"robot_config={robot_config}, gateway_port={args.gateway_port}.",
             flush=True,
         )
         return 0
 
-    requested_output = args.output_dir or WORKSPACE_ROOT / "outputs/Emerge" / task_name
+    default_output = WORKSPACE_ROOT / "outputs/Emerge" / task_name
+    if args.navigation_only:
+        default_output /= f"navigation_only_{301 + args.instance_index}"
+    requested_output = args.output_dir or default_output
     output_dir = assert_fresh_output_dir(requested_output)
     logs_dir = output_dir / "logs"
     workspace = output_dir / "workspace"
@@ -804,16 +931,14 @@ def main() -> int:
     _prepare_workspace(
         workspace,
         task_name=task_name,
-        instruction=task_instruction,
+        instruction=navigation_goal if args.navigation_only else task_instruction,
     )
     runtime_environment = dict(os.environ)
     runtime_environment["NO_COLOR"] = "1"
     runtime_environment["TERM"] = "dumb"
     max_action_steps = (
-        args.max_steps + 2
-        if args.max_steps is not None
-        else int(base_driver_config.get("max_action_steps", 4000))
-    )
+        args.max_steps if args.navigation_only else args.max_steps + 2
+    ) if args.max_steps is not None else int(base_driver_config.get("max_action_steps", 4000))
     driver_config = _episode_driver_config(
         base_driver_config,
         output_dir=output_dir,
@@ -825,6 +950,7 @@ def main() -> int:
         state_sync_timeout_s=args.state_sync_timeout,
         task_name=task_name,
         task_instruction=task_instruction,
+        navigation_only=args.navigation_only,
         r1pro_urdf_path=behavior_root
         / "datasets/omnigibson-robot-assets/models/r1pro/urdf/r1pro.urdf",
     )
@@ -837,9 +963,13 @@ def main() -> int:
     infrastructure_error: str | None = None
     evaluator_code: int | None = None
     failure: Exception | None = None
+    video_shutdown_graceful: bool | None = None
+    navigation_video: Path | None = None
+    navigation_video_error: str | None = None
     started_at = datetime.now(timezone.utc).isoformat()
     start_time = time.monotonic()
     agent: subprocess.Popen[bytes] | None = None
+    evaluator: subprocess.Popen[bytes] | None = None
 
     try:
         with (
@@ -875,7 +1005,9 @@ def main() -> int:
                 gateway_port=args.gateway_port,
                 task_name=task_name,
                 instance_index=args.instance_index,
-                max_steps=args.max_steps,
+                # Two evaluator steps of headroom let the final camera frame
+                # reach the controller before the official rollout terminates.
+                max_steps=args.max_steps + 2 if args.navigation_only else args.max_steps,
                 output_dir=output_dir,
                 write_video=args.write_video,
                 headless=args.headless,
@@ -899,7 +1031,10 @@ def main() -> int:
             session_id = f"cli:behavior-{task_name.replace('_', '-')}-{uuid.uuid4().hex}"
             agent = _start_agent(
                 args=args,
-                message=_agent_message(task_instruction=task_instruction),
+                message=_agent_message(
+                    task_instruction=task_instruction,
+                    navigation_goal=navigation_goal if args.navigation_only else None,
+                ),
                 session_id=session_id,
                 workspace=workspace,
                 environment=runtime_environment,
@@ -959,7 +1094,7 @@ def main() -> int:
                         finish_reason=finish_reason,
                         status=status,
                         feedback_rounds=feedback_rounds,
-                        max_rounds=args.max_agent_feedback_rounds,
+                        max_rounds=0 if args.navigation_only else args.max_agent_feedback_rounds,
                         actions_settled=_actions_settled(workspace),
                     )
                     if decision == "infrastructure":
@@ -1013,21 +1148,53 @@ def main() -> int:
     finally:
         if args.show_agent_events:
             _drain_agent_events(agent)
+        if (
+            args.navigation_only and not args.headless and sys.stdin.isatty()
+            and evaluator is not None and evaluator.poll() is None
+        ):
+            print("Navigation has ended. Inspect the simulator window; press Enter to close it.", flush=True)
+            try:
+                input()
+            except (EOFError, KeyboardInterrupt):
+                pass
+        if evaluator is not None and evaluator.poll() is None:
+            print("Closing the official evaluator and finalizing its video...", flush=True)
+            video_shutdown_graceful = _gracefully_stop_evaluator(evaluator)
+            if not video_shutdown_graceful:
+                print("WARNING: evaluator did not stop gracefully; the official MP4 may be incomplete.",
+                      file=sys.stderr, flush=True)
         for process in reversed(processes):
             stop_process_group(process)
+        if args.navigation_only and args.write_video:
+            try:
+                navigation_video = _render_navigation_video(
+                    workspace / "lightnav_frames", output_dir
+                )
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                navigation_video_error = f"{type(exc).__name__}: {exc}"
 
     status = read_json(status_path)
-    verdict = classify_episode(
-        status,
-        evaluator_returncode=evaluator_code,
-        infrastructure_error=infrastructure_error,
-    )
-    success = verdict == "success"
-    exit_code = agent_exit_code(
-        verdict=verdict,
-        success=success,
-        require_success=args.require_success,
-    )
+    robot_state = robot_state_section(workspace)
+    progress = robot_state.get("runtime_progress") or {}
+    navigation_result = _navigation_summary(progress)
+    if args.navigation_only:
+        finish_reason = (navigation_result or {}).get("finish_reason")
+        finished = finish_reason in {"model_stop_candidate", "step_budget"}
+        verdict = "navigation_run_finished" if finished and not infrastructure_error else "navigation_run_incomplete"
+        success = False  # Navigation is not official BEHAVIOR task success.
+        exit_code = 0 if verdict == "navigation_run_finished" else 2
+    else:
+        verdict = classify_episode(
+            status,
+            evaluator_returncode=evaluator_code,
+            infrastructure_error=infrastructure_error,
+        )
+        success = verdict == "success"
+        exit_code = agent_exit_code(
+            verdict=verdict,
+            success=success,
+            require_success=args.require_success,
+        )
     result = {
         "schema_version": "Emerge.behavior_episode_result.v1",
         "task": task_name,
@@ -1049,7 +1216,24 @@ def main() -> int:
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "duration_s": round(time.monotonic() - start_time, 3),
         "workspace": str(workspace),
+        "navigation": navigation_result,
+        "navigation_calls": progress.get("navigation_calls") or [],
+        "posture_calls": progress.get("posture_calls") or [],
+        "total_robot_action_steps": int(progress.get("gateway_action_steps") or 0),
+        "evaluator_resets_forwarded": int(robot_state.get("evaluator_resets_forwarded") or 0),
+        "upstream_cache_invalidations_sent": int(robot_state.get("upstream_cache_invalidations_sent") or 0),
+        "video_shutdown_graceful": video_shutdown_graceful,
     }
+    if args.navigation_only:
+        result["navigation_goal"] = navigation_goal
+        result["posture_steps"] = sum(
+            int(call.get("completed_steps") or 0) for call in result["posture_calls"]
+        )
+        result["official_task_success_measured"] = False
+        result["navigation_arrival_verified"] = False
+        result["navigation_video"] = str(navigation_video) if navigation_video else None
+        if navigation_video_error is not None:
+            result["navigation_video_error"] = navigation_video_error
     if failure is not None:
         result["error"] = f"{type(failure).__name__}: {failure}"
     atomic_write_json(output_dir / "agent_episode_result.json", result)

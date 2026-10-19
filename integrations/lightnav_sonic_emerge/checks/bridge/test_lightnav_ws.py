@@ -1,6 +1,11 @@
+import json
 import unittest
 
-from integrations.lightnav_sonic_emerge.bridge.lightnav_ws import LightNavProtocolError, parse_next_response
+from integrations.lightnav_sonic_emerge.bridge.lightnav_ws import (
+    LightNavProtocolError,
+    LightNavWsClient,
+    parse_next_response,
+)
 
 
 def _response(*, seq=4, stop=False, actions=None, rc=0):
@@ -20,11 +25,40 @@ def _response(*, seq=4, stop=False, actions=None, rc=0):
 
 
 class LightNavResponseTests(unittest.TestCase):
+    def test_optional_request_timeout_is_passed_to_socket(self) -> None:
+        class Socket:
+            def __init__(self):
+                self.timeout = None
+
+            def send(self, _message):
+                pass
+
+            def recv(self, *, timeout):
+                self.timeout = timeout
+                return json.dumps({"action": "login", "data": {"rc": 0}})
+
+        client = LightNavWsClient("ws://127.0.0.1:8051", request_timeout_s=10)
+        socket = Socket()
+        client._socket = socket
+        client._send_expect_ok("login", {})
+        self.assertEqual(socket.timeout, 10.0)
+        with self.assertRaisesRegex(ValueError, "request_timeout_s"):
+            LightNavWsClient("ws://127.0.0.1:8051", request_timeout_s=-1)
+
     def test_valid_response_preserves_first_waypoint(self) -> None:
         reply = parse_next_response(_response(), expected_seq=4)
         self.assertEqual(reply.first_waypoint, (0.25, 0.0, 0.1))
         self.assertFalse(reply.stop)
+        self.assertIsNone(reply.visible)
         self.assertEqual(reply.latency_ms, 12.5)
+
+    def test_visibility_flag_is_preserved_when_available(self) -> None:
+        response = _response()
+        response["data"]["visible"] = True
+        self.assertTrue(parse_next_response(response).visible)
+        response["data"]["visible"] = 1
+        with self.assertRaisesRegex(LightNavProtocolError, "visible"):
+            parse_next_response(response)
 
     def test_stop_response_is_valid(self) -> None:
         reply = parse_next_response(_response(stop=True))

@@ -15,6 +15,7 @@ export OPENPI_CHAMPION_MAPPING="${OPENPI_CHAMPION_MAPPING:-${OPENPI_ROOT}/task_c
 export OPENPI_CHAMPION_POLICY_CONFIG="${OPENPI_CHAMPION_POLICY_CONFIG:-pi_behavior_b1k_fast}"
 export OPENPI_GPU="${OPENPI_GPU:-0}"
 export SAM3_GPU="${SAM3_GPU:-0}"
+BEHAVIOR_SERVICES="${BEHAVIOR_SERVICES:-openpi,sam3}"
 
 exec bash "${REPO_ROOT}/scripts/model_server/start_external_model_servers.sh" \
-    --services openpi,sam3
+    --services "${BEHAVIOR_SERVICES}"

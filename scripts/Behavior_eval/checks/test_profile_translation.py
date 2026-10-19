@@ -38,6 +38,15 @@ class R1ProProfileTranslationTest(unittest.TestCase):
             [json.loads(example) for example in JSON_EXAMPLES.findall(english)],
         )
 
+    def test_profile_has_no_default_hand_preference(self) -> None:
+        english = ENGLISH.read_text(encoding="utf-8")
+        chinese = CHINESE.read_text(encoding="utf-8")
+        self.assertIn("neither hand\n   has default priority", english)
+        self.assertIn("左右手均无默认优先级", chinese)
+        self.assertNotIn("should explicitly select the left", english)
+        self.assertNotIn("先准备左手", chinese)
+        self.assertNotIn("显式选择左手", chinese)
+
 
 if __name__ == "__main__":
     unittest.main()

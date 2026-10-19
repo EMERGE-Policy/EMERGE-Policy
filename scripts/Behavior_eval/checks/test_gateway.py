@@ -15,10 +15,7 @@ import msgpack
 import numpy as np
 from PIL import Image
 
-from robot.behavior.gateway import (
-    B1KProxyGateway,
-    _zero_r1pro_base_action,
-)
+from robot.behavior.gateway import B1KProxyGateway, _supports_action_cache_invalidation
 from robot.behavior.observation import ObservationPublisher
 
 
@@ -26,6 +23,19 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+class CacheCapabilityTest(unittest.TestCase):
+    def test_capability_requires_explicit_boolean_true_in_valid_metadata(self) -> None:
+        metadata = {"emerge_capabilities": {"invalidate_action_cache": True}}
+        self.assertTrue(_supports_action_cache_invalidation(msgpack.packb(metadata)))
+        for value in (b"openpi-metadata", b"", "text", msgpack.packb([]),
+                      msgpack.packb({}),
+                      msgpack.packb({"emerge_capabilities": ["invalidate_action_cache"]}),
+                      msgpack.packb({"emerge_capabilities": {"invalidate_action_cache": 1}}),
+                      msgpack.packb({"emerge_capabilities": {"invalidate_action_cache": False}})):
+            with self.subTest(value=value):
+                self.assertFalse(_supports_action_cache_invalidation(value))
 
 
 class _FakeOpenPIServer:
@@ -346,65 +356,6 @@ def _unpack_array(value):
     return value
 
 
-class BaseLockedActionTest(unittest.TestCase):
-    def test_wire_payload_zeros_only_base_for_single_action_and_chunk(self) -> None:
-        action = np.arange(23, dtype=np.float32)[None, :]
-        chunk = np.arange(46, dtype=np.float32).reshape(2, 23)
-        message = msgpack.packb(
-            {"action": action, "action_chunk": chunk, "metadata": "preserved"},
-            default=_pack_array,
-        )
-
-        masked = msgpack.unpackb(
-            _zero_r1pro_base_action(message),
-            raw=False,
-            object_hook=_unpack_array,
-        )
-
-        np.testing.assert_allclose(masked["action"][..., :3], 0)
-        np.testing.assert_allclose(masked["action"][..., 3:], action[..., 3:])
-        np.testing.assert_allclose(masked["action_chunk"][..., :3], 0)
-        np.testing.assert_allclose(masked["action_chunk"][..., 3:], chunk[..., 3:])
-        self.assertEqual(masked["metadata"], "preserved")
-
-    def test_invalid_action_shape_fails_closed(self) -> None:
-        message = msgpack.packb(
-            {"action": np.ones((1, 22), dtype=np.float32)},
-            default=_pack_array,
-        )
-        with self.assertRaisesRegex(RuntimeError, "23-D"):
-            _zero_r1pro_base_action(message)
-
-
-class ControlModeStateTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.gateway = B1KProxyGateway(controlled=True)
-
-    def test_mode_change_is_between_actions_and_resets_policy(self) -> None:
-        state = self.gateway.snapshot()
-        self.assertEqual(state["control_mode"], "navigation")
-        self.assertTrue(state["base_motion_enabled"])
-
-        self.assertTrue(self.gateway.set_control_mode("manipulation"))
-        state = self.gateway.snapshot()
-        self.assertEqual(state["control_mode"], "manipulation")
-        self.assertFalse(state["base_motion_enabled"])
-        self.assertTrue(state["upstream_needs_reset"])
-
-        execution_id = self.gateway.begin_execution("test", 2)
-        with self.assertRaisesRegex(RuntimeError, "while a robot action is executing"):
-            self.gateway.set_control_mode("navigation")
-        self.gateway.cancel_execution(execution_id, "test complete")
-        self.assertTrue(self.gateway.set_control_mode("navigation"))
-
-    def test_evaluator_reset_restores_navigation(self) -> None:
-        self.gateway.set_control_mode("manipulation")
-        self.gateway._record_reset()
-        state = self.gateway.snapshot()
-        self.assertEqual(state["control_mode"], "navigation")
-        self.assertTrue(state["base_motion_enabled"])
-
-
 class _ControllableOpenPIServer:
     """Fake OpenPI server whose replies are released by the test on demand."""
 
@@ -414,6 +365,7 @@ class _ControllableOpenPIServer:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.stop_event: asyncio.Event | None = None
         self.received: list[bytes] = []
+        self.metadata = b"openpi-metadata"
         self._websocket = None
         self._lock = threading.Lock()
         self.thread = threading.Thread(target=self._thread_main, daemon=True)
@@ -445,7 +397,7 @@ class _ControllableOpenPIServer:
 
     async def _handler(self, websocket) -> None:
         self._websocket = websocket
-        await websocket.send(b"openpi-metadata")
+        await websocket.send(self.metadata)
         async for message in websocket:
             with self._lock:
                 self.received.append(bytes(message))
@@ -505,13 +457,16 @@ class ControlledExecutionOwnershipTest(unittest.TestCase):
             max_size=None,
         )
 
-    def test_manipulation_mode_masks_base_on_relayed_openpi_action(self) -> None:
+    def test_full_body_action_and_chunk_are_forwarded_byte_for_byte(self) -> None:
         from websockets.sync.client import connect
 
-        self.gateway.set_control_mode("manipulation")
         execution_id = self.gateway.begin_execution("turn on the radio", 1)
-        action = np.arange(23, dtype=np.float32)[None, :]
-        response = msgpack.packb({"action": action}, default=_pack_array)
+        action = np.arange(1, 24, dtype=np.float32)[None, :]
+        chunk = np.arange(1, 47, dtype=np.float32).reshape(2, 23)
+        response = msgpack.packb(
+            {"action": action, "action_chunk": chunk, "metadata": "preserved"},
+            default=_pack_array,
+        )
 
         with connect(
             f"ws://127.0.0.1:{self.gateway.listen_port}",
@@ -520,22 +475,18 @@ class ControlledExecutionOwnershipTest(unittest.TestCase):
         ) as client:
             self.assertEqual(client.recv(), b"openpi-metadata")
             client.send(b"observation")
-            self.upstream.wait_for_requests(2)
-            self.assertEqual(
-                msgpack.unpackb(self.upstream.received[0], raw=False),
-                {"reset": True},
-            )
+            self.upstream.wait_for_requests(1)
+            self.assertEqual(self.upstream.received, [b"observation"])
             self.upstream.send(response)
-            masked = msgpack.unpackb(
-                client.recv(timeout=2),
-                raw=False,
-                object_hook=_unpack_array,
-            )
+            self.assertEqual(client.recv(timeout=2), response)
 
         result = self.gateway.wait_for_execution(execution_id, progress_timeout_s=2)
-        np.testing.assert_allclose(masked["action"][0, :3], 0)
-        np.testing.assert_allclose(masked["action"][0, 3:], action[0, 3:])
         self.assertEqual(result["status"], "step_completed")
+        state = self.gateway.snapshot()
+        self.assertNotIn("control_mode", state)
+        self.assertNotIn("base_motion_enabled", state)
+        self.assertEqual(state["upstream_cache_invalidations_sent"], 0)
+        self.assertEqual(state["evaluator_resets_forwarded"], 0)
 
     def test_late_reply_from_a_cancelled_execution_is_not_credited_to_the_next_one(self) -> None:
         execution_a = self.gateway.begin_execution("turn on the radio", 5)
@@ -693,10 +644,13 @@ class ControlledExecutionOwnershipTest(unittest.TestCase):
             self.assertEqual(result["completed_steps"], 1)
             self.assertEqual(self.gateway.snapshot()["local_actions_generated"], 1)
 
-    def test_switching_from_local_action_resets_openpi_before_replanning(self) -> None:
+    def test_vln_handoff_invalidates_only_actions_then_preserves_consecutive_vla(self) -> None:
         from websockets.sync.client import connect
 
         self.gateway.stop()
+        self.upstream.metadata = msgpack.packb({
+            "emerge_capabilities": {"invalidate_action_cache": True}, "model": "test-champion",
+        })
         with TemporaryDirectory() as temporary:
             self.gateway = B1KProxyGateway(
                 upstream_url=f"ws://127.0.0.1:{self.upstream.port}",
@@ -712,33 +666,89 @@ class ControlledExecutionOwnershipTest(unittest.TestCase):
                 compression=None,
                 max_size=None,
             ) as client:
-                self.assertEqual(client.recv(), b"openpi-metadata")
+                self.assertEqual(client.recv(), self.upstream.metadata)
                 client.send(_r1pro_message())
                 deadline = time.monotonic() + 2
                 while self.gateway.observation_count < 1 and time.monotonic() < deadline:
                     time.sleep(0.01)
                 local_id = self.gateway.begin_local_execution(
-                    "hold_position", 1, self.gateway.current_hold_action()
+                    "navigate_vln", 1, self.gateway.current_hold_action()
                 )
                 client.recv(timeout=2)
                 self.assertEqual(
                     self.gateway.wait_for_execution(local_id, progress_timeout_s=2)["status"],
                     "step_completed",
                 )
-                self.assertTrue(self.gateway.snapshot()["upstream_needs_reset"])
+                self.assertTrue(self.gateway.snapshot()["upstream_needs_action_cache_invalidation"])
 
                 vla_id = self.gateway.begin_execution("turn on the radio", 1)
                 client.send(_r1pro_message())
                 self.upstream.wait_for_requests(2)
-                reset = msgpack.unpackb(self.upstream.received[0], raw=False)
-                self.assertEqual(reset, {"reset": True})
-                self.upstream.send(b"action-after-reset")
-                self.assertEqual(client.recv(timeout=2), b"action-after-reset")
+                control = msgpack.unpackb(self.upstream.received[0], raw=False)
+                self.assertEqual(control, {"invalidate_action_cache": True})
+                response = msgpack.packb(
+                    {"action": np.arange(1, 24, dtype=np.float32)[None, :]}, default=_pack_array
+                )
+                self.upstream.send(response)
+                self.assertEqual(client.recv(timeout=2), response)
                 result = self.gateway.wait_for_execution(vla_id, progress_timeout_s=2)
+                self.assertEqual(result["status"], "step_completed")
+
+                next_vla = self.gateway.begin_execution("turn on the radio", 1)
+                client.send(_r1pro_message())
+                self.upstream.wait_for_requests(3)
+                self.assertEqual(self.upstream.received[2], _r1pro_message())
+                self.upstream.send(response)
+                self.assertEqual(client.recv(timeout=2), response)
+                result = self.gateway.wait_for_execution(next_vla, progress_timeout_s=2)
 
             self.assertEqual(result["status"], "step_completed")
-            self.assertFalse(self.gateway.snapshot()["upstream_needs_reset"])
-            self.assertEqual(self.gateway.snapshot()["upstream_resets_sent"], 1)
+            self.assertFalse(self.gateway.snapshot()["upstream_needs_action_cache_invalidation"])
+            self.assertEqual(self.gateway.snapshot()["upstream_cache_invalidations_sent"], 1)
+            self.assertEqual(self.gateway.snapshot()["evaluator_resets_forwarded"], 0)
+
+    def test_legacy_upstream_cannot_silently_reset_stages_after_local_motion(self) -> None:
+        from websockets.exceptions import ConnectionClosed
+
+        local_id = self.gateway.begin_local_execution("navigate_vln", 1, [0.0] * 23)
+        with self._connect() as client:
+            self.assertEqual(client.recv(), b"openpi-metadata")
+            client.send(b"initial-observation")
+            client.recv(timeout=2)
+            self.gateway.wait_for_execution(local_id, progress_timeout_s=2)
+            self.assertEqual(self.upstream.request_count(), 0)
+
+            vla_id = self.gateway.begin_execution("turn on the radio", 1)
+            client.send(b"post-navigation-observation")
+            with self.assertRaises(ConnectionClosed):
+                client.recv(timeout=3)
+            result = self.gateway.wait_for_execution(vla_id, progress_timeout_s=2)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("invalidate_action_cache", result["detail"])
+        self.assertEqual(self.upstream.received, [])
+        self.assertEqual(self.gateway.snapshot()["upstream_cache_invalidations_sent"], 0)
+
+    def test_official_episode_reset_clears_pending_invalidation_without_extra_command(self) -> None:
+        local_id = self.gateway.begin_local_execution("navigate_vln", 1, [0.0] * 23)
+        with self._connect() as client:
+            client.recv()
+            client.send(b"initial-observation")
+            client.recv(timeout=2)
+            self.gateway.wait_for_execution(local_id, progress_timeout_s=2)
+            client.send(msgpack.packb({"reset": True}))
+            self.upstream.wait_for_requests(1)
+            self.assertEqual(msgpack.unpackb(self.upstream.received[0], raw=False), {"reset": True})
+            vla_id = self.gateway.begin_execution("turn on the radio", 1)
+            client.send(b"new-episode-observation")
+            self.upstream.wait_for_requests(2)
+            self.assertEqual(self.upstream.received[1], b"new-episode-observation")
+            self.upstream.send(b"new-action")
+            self.assertEqual(client.recv(timeout=2), b"new-action")
+            self.gateway.wait_for_execution(vla_id, progress_timeout_s=2)
+        state = self.gateway.snapshot()
+        self.assertEqual(state["evaluator_resets_forwarded"], 1)
+        self.assertEqual(state["upstream_cache_invalidations_sent"], 0)
+        self.assertFalse(state["upstream_needs_action_cache_invalidation"])
 
     def test_local_trajectory_returns_each_action_in_order(self) -> None:
         from websockets.sync.client import connect

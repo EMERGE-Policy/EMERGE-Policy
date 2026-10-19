@@ -1,0 +1,1161 @@
+EMERGE 相对最初克隆版本的代码审计（2026-10-19，撤除 face_surface 后）
+================================================================
+
+比较口径
+--------
+本文件是整理提交前的审计快照。下文的“当前HEAD”“未提交”“未跟踪”及路径数
+均描述审计当时的状态；后续正常提交不会使这份历史快照自动变成最新状态报告。
+仓库：/data/yxy/EMERGE-Humanoid
+最初克隆 main：1c6accd7f4b138de69654b95ae3b0ed8907b7107（1c6accd，来自本机 Git reflog，不是凭记忆推断）
+随后切到的 humanoid-dev 基线：9a862bd（已含 LightNav–SONIC，不能都算成本轮 BEHAVIOR 新写）
+当前 HEAD：7b5e6094bb8af544c0f4eb07aa84d06e5bbafc74
+本清单比较“初始提交 -> 当前实际工作树”，包括已提交、未提交和未跟踪代码。
+不只是 git diff HEAD。无需联网即可复现历史快照差异；没有对远程仓库作写入。
+主仓库差异138个路径：32个修改、88个新增Git路径、18个尚未跟踪的新文件。
+其中3个新增路径是Git子模块入口，不将其全部上游源码逐一算作本地修改。
+本审计文件本身是本轮新增报告，不计入上述138。
+状态M=初始版本已有而现在修改；A=相对初始新增且已进入Git；
+?=相对初始新增且当前仍未跟踪。A并不代表当前已提交全部后续修改。
+
+本轮回退
+--------
+删除的完整源码/测试文件（均为此前未跟踪的新文件）：
+  Emerge/subagents/object_location/tools/measure_surface.py
+  robot/behavior/surface_facing.py
+  robot/behavior/r1pro_base_motion.py
+  scripts/Behavior_eval/checks/test_surface_facing.py
+  scripts/Behavior_eval/checks/test_surface_gateway.py
+  scripts/Behavior_eval/checks/test_r1pro_base_motion.py
+同步撤除：选面提示/工具注册/surface结果、冻结测面快照、底盘速度积分反馈、
+网关测面接口、driver动作与状态、surface_facing配置、工具等待分支和使用文档。
+英文及中文profile都不再要求“VLA前必须对齐”，没有恢复左手优先。
+未撤除LightNav、RGB-D定位、IK粗接近、姿态动作、冠军阶段保留协议或官方baseline。
+运行结果、视频、模型、环境和已有Git历史均未删除。
+回退前21个相关源码文件临时备份：/tmp/emerge-face-surface-rollback-20261019.json
+这只是临时恢复材料，/tmp不应作为长期备份。
+未执行 git commit/reset/clean，也没有启动正式实验。
+
+当前执行关系
+------------
+正常Agent：
+  eval_behavior_agent.py（进程/评测生命周期）
+    -> 原Emerge.cli.headless / AgentLoop（主Agent，文本输入）
+    -> execute_robot_action -> ACTION.md
+    -> 原robot/controller.py -> BehaviorR1ProDriver
+    -> 同一个受控WebSocket网关 -> 官方BEHAVIOR evaluator
+  object_location / task_verification负责看图；
+  LightNav经navigate_vln执行底盘速度；
+  IK经move_to_pose/move_linear执行本地轨迹；
+  VLA经原冠军服务执行完整23维动作。
+冠军baseline：
+  官方evaluator -> 冠军服务8011 -> 动作，不启动主Agent或受控网关。
+不再有navigation/manipulation锁底盘模式，也没有face_surface。
+本地运动后只清过期action缓存，不清冠军task/subtask阶段历史。
+
+逐路径完整清单（当前行号仅对应本次快照）
+--------------------------------------
+
+一、公共 EMERGE Agent、技能与感知（24）
+------------------------------------------------
+
+[001] M Emerge/README.md
+  功能/改动：定位架构说明由 VGGT+SAM3 改为 RGB-D/VGGT+SAM3；文档变化。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：368行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -21 +21 @@ AgentLoop
+
+[002] M Emerge/agent/loop.py
+  功能/改动：_register_default_tools：工作区限制模式下 ReadFileTool 额外允许只读访问内置技能目录；写入、编辑和目录工具权限没有同样扩张。主 Agent 仍是原来的推理/工具调用循环。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：601行。
+  代码入口（名称:当前行）：AgentLoop:53；AgentLoop.__init__:67；AgentLoop._register_default_tools:169；AgentLoop._emit:210；AgentLoop.cancel_actions:214；AgentLoop.aclose:218；AgentLoop._strip_think:224；AgentLoop._tool_hint:231；AgentLoop._run_agent_loop:241；AgentLoop.run:354；AgentLoop._start_visual_monitor:378；AgentLoop._stop_visual_monitor:388；AgentLoop._handle_stop:392；AgentLoop._handle_restart:406；AgentLoop._dispatch:418；AgentLoop.stop:440；AgentLoop._process_message:445；AgentLoop._save_turn:555；AgentLoop.process_direct:580。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -17,0 +18 @@ from Emerge.agent.context import ContextBuilder
+    @@ -172 +173,11 @@ class AgentLoop:
+
+[003] M Emerge/agent/tools/embodied.py
+  功能/改动：description/parameters：动作能力、坐标和 VLA 指令遵循当前 EMBODIED.md，而非一概假设 LIBERO/Panda；增加 navigate_vln、hold_position 说明。_result_timeout：VLA 按步数、导航按墙钟、IK/姿态按600秒上限等待。未新增 face_surface，也不再支持 set_control_mode。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：319行。
+  代码入口（名称:当前行）：EmbodiedActionTool:37；EmbodiedActionTool.name:41；EmbodiedActionTool.description:45；EmbodiedActionTool.parameters:58；EmbodiedActionTool.__init__:105；EmbodiedActionTool.execute:115；EmbodiedActionTool._result_timeout:144；EmbodiedActionTool._accept_action:172；EmbodiedActionTool._wait_for_action_result:186；EmbodiedActionTool._poll_action_result:235；EmbodiedActionTool._request_action_cancel:273；EmbodiedActionTool.cancel_active:287；EmbodiedActionTool._load_action_document:310。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -18,0 +19 @@ from Emerge.utils.action_queue import (
+    @@ -25 +25,0 @@ from Emerge.utils.action_queue import (
+    @@ -33,0 +34 @@ _VLA_PER_STEP_TIMEOUT_S = 15.0
+    @@ -47 +48,3 @@ class EmbodiedActionTool(Tool):
+    @@ -49 +52 @@ class EmbodiedActionTool(Tool):
+    @@ -67 +70,3 @@ class EmbodiedActionTool(Tool):
+    @@ -75 +80,2 @@ class EmbodiedActionTool(Tool):
+    @@ -77 +83 @@ class EmbodiedActionTool(Tool):
+    @@ -82 +88,2 @@ class EmbodiedActionTool(Tool):
+    @@ -85,4 +92,3 @@ class EmbodiedActionTool(Tool):
+    @@ -139,0 +146,6 @@ class EmbodiedActionTool(Tool):
+    @@ -145,0 +158,11 @@ class EmbodiedActionTool(Tool):
+
+[004] M Emerge/agent/tools/filesystem.py
+  功能/改动：ReadFileTool.__init__/_resolve 新增 additional_allowed_dirs，只读白名单经 resolve 后校验；供主 Agent 读取内置 SKILL.md。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：415行。
+  代码入口（名称:当前行）：_resolve_path:10；_FsTool:26；_FsTool.__init__:29；_FsTool._resolve:41；_FsTool._protected_write_error:44；ReadFileTool:57；ReadFileTool.__init__:63；ReadFileTool._resolve:80；ReadFileTool.name:94；ReadFileTool.description:98；ReadFileTool.parameters:105；ReadFileTool.execute:124；WriteFileTool:172；WriteFileTool.name:176；WriteFileTool.description:180；WriteFileTool.parameters:184；WriteFileTool.execute:194；_find_match:212；EditFileTool:238；EditFileTool.name:242；EditFileTool.description:246；EditFileTool.parameters:254；EditFileTool.execute:269；EditFileTool._not_found_msg:306；ListDirTool:332；ListDirTool.name:343；ListDirTool.description:347；ListDirTool.parameters:355；ListDirTool.execute:373。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -62,0 +63,30 @@ class ReadFileTool(_FsTool):
+
+[005] M Emerge/agent/visual_monitor.py
+  功能/改动：改用 task_verification 的 ObservationStore；若有专用验证清单，发送所有命名视角，否则保留原参考相机。提示词从单图改为多图，PLAN 判据和中断机制仍保留。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：312行。
+  代码入口（名称:当前行）：VisualInterruptSignal:45；VisualInterruptCoordinator:53；VisualInterruptCoordinator.__init__:56；VisualInterruptCoordinator.bind:59；VisualInterruptCoordinator.publish_from_thread:62；VisualInterruptCoordinator.wait_for:65；VisualMonitor:76；VisualMonitor.__init__:79；VisualMonitor.is_running:119；VisualMonitor.start:122；VisualMonitor.stop:142；VisualMonitor._verification_loop:156；VisualMonitor._verify:179；VisualMonitor._thread_main:202；VisualMonitor._poll_once:213；VisualMonitor._read_pending_action:304。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -6 +5,0 @@ import asyncio
+    @@ -24,0 +24 @@ from Emerge.subagents.task_verification.tools import SubmitVerificationTool
+    @@ -34,2 +34,3 @@ You are a fast visual interrupt monitor for an embodied agent. The task includes
+    @@ -37 +38,2 @@ its full done criterion are visibly achieved, then call
+    @@ -101,0 +104 @@ class VisualMonitor:
+    @@ -213 +216 @@ class VisualMonitor:
+    @@ -222 +225,2 @@ class VisualMonitor:
+    @@ -224 +228 @@ class VisualMonitor:
+    @@ -232,5 +236,2 @@ class VisualMonitor:
+    @@ -238,2 +239,23 @@ class VisualMonitor:
+    @@ -242,11 +264 @@ class VisualMonitor:
+
+[006] M Emerge/config/schema.py
+  功能/改动：ObjectLocationSubagentConfig 新增 geometry_backend: auto/vggt/rgbd，默认 auto。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：233行。
+  代码入口（名称:当前行）：Base:11；AgentDefaults:17；AgentDefaults.should_warn_deprecated_memory_window:34；AgentsConfig:39；ObjectLocationSubagentConfig:45；TaskVerificationSubagentConfig:62；VisualMonitorConfig:69；SubagentsConfig:78；ProviderConfig:89；ProvidersConfig:97；ExecToolConfig:121；ToolsConfig:128；Config:135；Config.workspace_path:145；Config._match_provider:149；Config.get_provider:202；Config.get_provider_name:207；Config.get_api_key:212；Config.get_api_base:217。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -3,0 +4 @@ from pathlib import Path
+    @@ -47,0 +49 @@ class ObjectLocationSubagentConfig(Base):
+
+[007] M Emerge/runtime/configuration.py
+  功能/改动：load_runtime_config 支持按 RunRequest.visual_monitor_enabled 覆盖视觉监控开关。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：26行。
+  代码入口（名称:当前行）：load_runtime_config:11。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -23,0 +24,2 @@ def load_runtime_config(request: RunRequest) -> Config:
+
+[008] M Emerge/runtime/protocol.py
+  功能/改动：RunRequest 增加可选 visual_monitor_enabled 字段；不改变默认主循环。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：79行。
+  代码入口（名称:当前行）：utc_now:12；Contract:16；RunRequest:20；RunRequest.nonblank:38；RunEvent:44；RunError:54；RunResult:59；RunResult.exit_code:78。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -28,0 +29 @@ class RunRequest(Contract):
+
+[009] M Emerge/skills/README.md
+  功能/改动：内置技能表新增 lightnav。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：24行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -23,0 +24 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
+
+[010] M Emerge/skills/object-location/SKILL.md
+  功能/改动：允许无歧义、已标定单视角 RGB-D 做可见表面粗几何定位；关系/身份不清时仍要求跨视角验证。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：24行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -18 +18 @@ Follow this sequence:
+
+[011] M Emerge/skills/planning/SKILL.md
+  功能/改动：VLA 通常用当前阶段指令；对固定整任务指令 checkpoint 增加例外，局部目标写入计划/推理，不改写策略 prompt。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：72行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -26,2 +26,4 @@ For any multi-step embodied task, track progress in `PLAN.md`. It holds the whol
+
+[012] M Emerge/skills/vla/SKILL.md
+  功能/改动：明确当前 embodiment 的固定 effective_prompt 优先于阶段局部指令；普通 LIBERO 的阶段指令路线仍在。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：105行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -14 +14,2 @@ Identify the current manipulation target and intended local change. Treat the
+    @@ -21 +22 @@ Use VLA when the target is visible and the next phase involves adaptive alignmen
+    @@ -23,2 +24,7 @@ visual-contact phase, even when the current PLAN subgoal combines grasp,
+
+[013] M Emerge/subagents/object_location/agent.py
+  功能/改动：_compact_objects 向主 Agent 额外返回 position_type、bbox_world_min_m、bbox_world_max_m。测面工具和 surface 输出分支已撤销。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：128行。
+  代码入口（名称:当前行）：ObjectLocationSubagent:20；ObjectLocationSubagent.__init__:23；ObjectLocationSubagent.last_diagnostics:39；ObjectLocationSubagent._run:43；ObjectLocationSubagent._tool_work_complete:50；ObjectLocationSubagent.build_result:54；_compact_objects:90；_compact_summary:120。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -108,0 +109,3 @@ def _compact_objects(
+
+[014] M Emerge/subagents/object_location/context.py
+  功能/改动：定位提示词适配 RGB-D 单视角几何与关系歧义多视角确认；已删除 face_surface 专用选面提示。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：92行。
+  代码入口（名称:当前行）：ObjectLocationContextBuilder:86；ObjectLocationContextBuilder.__init__:87。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -44,3 +44,5 @@ Always use this candidate-verification workflow:
+    @@ -59,5 +61,6 @@ Always use this candidate-verification workflow:
+
+[015] M Emerge/subagents/object_location/register.py
+  功能/改动：给 LocationEngine 传 geometry_backend；描述从 LIBERO/world 专用改成观测坐标系下的通用对象/控件。仍只注册原有观察、分割、定位工具。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：94行。
+  代码入口（名称:当前行）：build_object_location_subagent:28。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -54,0 +55 @@ def build_object_location_subagent(
+    @@ -72,2 +73,2 @@ def build_object_location_subagent(
+
+[016] M Emerge/subagents/object_location/skills/object-localization/SKILL.md
+  功能/改动：与顶层 object-location 技能同步，允许明确的 RGB-D 单视角，关系歧义仍跨视角核验。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：24行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -18 +18 @@ Follow this sequence:
+
+[017] M Emerge/subagents/object_location/tools/location/__init__.py
+  功能/改动：模块说明改为可复用的标定几何，而不是仅 VGGT。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：15行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -1 +1 @@
+
+[018] M Emerge/subagents/object_location/tools/location/engine.py
+  功能/改动：_ensure_geometry 根据 auto/rgbd/vggt 选择原生深度或重建；RGB-D 保留原 RGB 供分割 overlay；locate_candidates 按后端估计并返回坐标系；RGB-D 的几何最小视角数为1，VGGT 继续配置的多视角要求。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：351行。
+  代码入口（名称:当前行）：CandidateSegmentation:27；LocationEngine:35；LocationEngine.__init__:36；LocationEngine.reset:67；LocationEngine.segment_candidates:73；LocationEngine.locate_candidates:120；LocationEngine._get_geometry:223；LocationEngine._required_verified_views:272；LocationEngine._infer_sam3:284；_select_candidate_masks:296；_verified_instances:343。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -1 +1 @@
+    @@ -17,0 +18,3 @@ from Emerge.subagents.object_location.tools.location.pose import (
+    @@ -25 +28 @@ class CandidateSegmentation:
+    @@ -45,0 +49 @@ class LocationEngine:
+    @@ -55,0 +60,4 @@ class LocationEngine:
+    @@ -62,0 +71 @@ class LocationEngine:
+    @@ -120,0 +130,2 @@ class LocationEngine:
+    @@ -140 +151 @@ class LocationEngine:
+    @@ -143 +154 @@ class LocationEngine:
+    @@ -161,11 +172,21 @@ class LocationEngine:
+    @@ -172,0 +194,6 @@ class LocationEngine:
+    @@ -175,0 +203,6 @@ class LocationEngine:
+    @@ -184,0 +218 @@ class LocationEngine:
+    @@ -193,0 +228,22 @@ class LocationEngine:
+    @@ -215,0 +272,12 @@ class LocationEngine:
+
+[019] A Emerge/subagents/object_location/tools/location/rgbd_geometry.py
+  功能/改动：新增 backproject_masked_depth、estimate_rgbd_object_locations、轴向异常值裁剪：SAM3 mask+米制深度+标定反投影，产生实测位置、可见表面包围盒和来源，不使用模拟器真值。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：169行。
+  代码入口（名称:当前行）：backproject_masked_depth:12；estimate_rgbd_object_locations:54；_trim_axis_outliers:163。
+
+[020] M Emerge/subagents/object_location/tools/location/tool.py
+  功能/改动：locate_candidates schema 的 verified_instances 最少由2改为1；描述解释原生 RGB-D 与 VGGT 视角约束不同，不能据此跳过身份判断。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：125行。
+  代码入口（名称:当前行）：LocateCandidatesTool:14；LocateCandidatesTool.__init__:17；LocateCandidatesTool.name:23；LocateCandidatesTool.description:27；LocateCandidatesTool.parameters:42；LocateCandidatesTool.reset:111；LocateCandidatesTool.execute:115。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -34,2 +34,5 @@ class LocateCandidatesTool(Tool):
+    @@ -73 +76,4 @@ class LocateCandidatesTool(Tool):
+    @@ -90 +96 @@ class LocateCandidatesTool(Tool):
+
+[021] M Emerge/subagents/object_location/tools/observation.py
+  功能/改动：CameraView/CameraObservation 新增 depth_path、depth_m、coordinate_frame、has_rgbd；load 校验视角名、参考视角、内外参和米制深度。coordinate_frame 当前必填（存在 LIBERO 兼容缺口）。测面快照分支已撤销。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：174行。
+  代码入口（名称:当前行）：CameraView:15；CameraView.image_data_url:24；CameraObservation:30；CameraObservation.has_rgbd:36；ObservationStore:40；ObservationStore.__init__:43；ObservationStore.reset:50；ObservationStore.load:53；ObservationStore.current:111；_load_depth:120；_validate_calibration:154。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -18,0 +19,2 @@ class CameraView:
+    @@ -29,0 +32 @@ class CameraObservation:
+    @@ -31,0 +35,4 @@ class CameraObservation:
+    @@ -47,0 +55,5 @@ class ObservationStore:
+    @@ -49 +61,11 @@ class ObservationStore:
+    @@ -52,0 +75,10 @@ class ObservationStore:
+    @@ -55 +87 @@ class ObservationStore:
+    @@ -58,5 +90,4 @@ class ObservationStore:
+    @@ -64,0 +96,8 @@ class ObservationStore:
+    @@ -66 +105,2 @@ class ObservationStore:
+    @@ -77,0 +118,57 @@ class ObservationStore:
+
+[022] M Emerge/subagents/object_location/tools/segment_candidates.py
+  功能/改动：文案从缓存 VGGT 改为缓存标定几何；候选分割的主流程未替换。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：236行。
+  代码入口（名称:当前行）：SegmentCandidatesTool:31；SegmentCandidatesTool.__init__:34；SegmentCandidatesTool.name:39；SegmentCandidatesTool.description:43；SegmentCandidatesTool.parameters:58；SegmentCandidatesTool.execute:116；SegmentCandidatesTool.reset:140；_segmentation_summary:144；_render_overlays:179；_instance_label:235。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -54 +54 @@ class SegmentCandidatesTool(Tool):
+
+[023] M Emerge/subagents/task_verification/context.py
+  功能/改动：增加 BEHAVIOR room_overview/table_overhead/table_side/head 四路验证视角用途的提示。属于公共子 Agent 提示词，不只是 profile。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：41行。
+  代码入口（名称:当前行）：TaskVerificationContextBuilder:35；TaskVerificationContextBuilder.__init__:36。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -13,0 +14,5 @@ Always call `observe_scene` first and inspect every returned full camera view.
+
+[024] M Emerge/subagents/task_verification/tools/observation.py
+  功能/改动：优先读取 artifacts/verification_observations/observation.json，不存在则回退原观测；校验视角、参考视角和专用清单结构。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：83行。
+  代码入口（名称:当前行）：CameraView:12；CameraView.image_data_url:16；CameraObservation:22；ObservationStore:27；ObservationStore.__init__:30；ObservationStore.manifest_path:41；ObservationStore.reset:48；ObservationStore.load:51。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -32 +32 @@ class ObservationStore:
+    @@ -34,0 +35,3 @@ class ObservationStore:
+    @@ -36,0 +40,8 @@ class ObservationStore:
+    @@ -41 +52,4 @@ class ObservationStore:
+    @@ -48,0 +63,16 @@ class ObservationStore:
+    @@ -50 +80 @@ class ObservationStore:
+
+二、BEHAVIOR 执行驱动与网关（8）
+------------------------------------------------
+
+[025] A robot/behavior/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[026] A robot/behavior/approach.py
+  功能/改动：compute_precontact_pose：依据定位返回的包围盒和实测末端选择预接触点；side=auto 按几何选较近手臂，不等于左手优先。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：120行。
+  代码入口（名称:当前行）：PrecontactPose:16；compute_precontact_pose:26；_eef_position:92；_eef_orientation:102；_vector:116。
+
+[027] A robot/behavior/contracts.py
+  功能/改动：新增配置、精确任务指令、步数、官方评测结果及完成/成功分类校验；支持 navigation_only，已删除 surface_facing 配置契约。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：400行。
+  代码入口（名称:当前行）：ContractError:31；ActionValidationError:35；EvaluationValidationError:39；ConfigValidationError:43；normalize_instruction:52；validate_instruction:57；validate_step:79；validate_action:111；_require_mapping:146；_positive_int:152；_positive_float:159；_camera_calibration:172；validate_driver_config:233；validate_evaluation:293；episode_terminated:342；episode_succeeded:349；classify_episode:358；agent_exit_code:385。
+
+[028] A robot/behavior/gateway.py
+  功能/改动：B1KProxyGateway：官方 evaluator 与冠军服务间 WebSocket 代理，可无干预透传或按 Agent 预算门控；通过同一路径执行本地动作、同步观测、统计完成/取消/断连。VLA 23维不锁底盘；本地动作后仅 invalidate_action_cache，不清冠军阶段。已去掉测面对齐及其里程计接口。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：958行。
+  代码入口（名称:当前行）：GatewayStats:57；ExecutionState:74；B1KProxyGateway:102；_close_description:819；_is_reset_message:830；_pack_numpy_array:842；_pack_action_response:861；_supports_action_cache_invalidation:871；_pack_action_cache_invalidation_request:887；_validate_local_action:893；_health_check:905；parse_args:911；main:929。
+
+[029] A robot/behavior/observation.py
+  功能/改动：ObservationPublisher：从官方请求侧复制并解码三路 RGB-D/proprio，变换到 robot_base，发布图像、深度、标定、保持动作及机器人状态；原子写入/版本裁剪和线程锁。已去掉对齐专用速度积分/能力声明。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：555行。
+  代码入口（名称:当前行）：_unpack_array:49；_as_rgb_uint8:66；_as_depth_float32:86；_scaled_intrinsics:102；_as_vector:115；_pose_matrix:128；_camera_transforms:154；_r1pro_robot_state:167；ObservationPublisher:208；_prune_revisions:535；_utc_now:554。
+
+[030] A robot/behavior/r1pro_kinematics.py
+  功能/改动：R1ProKinematics：解析URDF，计算FK，核对实测末端，执行精确IK和粗接近 solve_approach；body_state 提供关节/限位/连杆姿态，供姿态动作和观测使用。不含环境碰撞规划。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：354行。
+  代码入口（名称:当前行）：Joint:24；IKSolution:36；R1ProKinematics:45；_arm_joint_names:283；_parse_joint:290；_attribute_vector:314；_vector:319；_rpy_matrix:326；_axis_angle_transform:341。
+
+[031] A robot/behavior/r1pro_motion.py
+  功能/改动：plan_move_to_pose/move_linear/set_gripper/adjust_posture：生成有界23维本地轨迹，保持其余关节；支持 coarse 软方向粗接近、steps 最短运动时长、settle_steps 末端保持。限位/FK核对不等于一定物理到位。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：411行。
+  代码入口（名称:当前行）：MotionPlan:22；plan_adjust_posture:29；plan_move_to_pose:93；plan_move_linear:157；plan_set_gripper:225；_joint_state:262；_target_orientation:272；_normalized_quaternion:286；_motion_budget:294；_apply_motion_timing:309；_interpolate_arm_actions:343；_validate_model_state:366；_require_solution:392；_side:400；_vector:407。
+
+[032] A robot/drivers/behavior_r1pro_driver.py
+  功能/改动：新增 BEHAVIOR 原生驱动：接收 ACTION.md 经原 Controller 分派的 VLA、navigate_vln、IK、夹爪、保持、姿态动作；维护同步/预算/官方结果/可见状态，统一经网关执行。face_surface 已撤除；nav/manipulation 模式区分已删除。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：832行。
+  代码入口（名称:当前行）：_int_or_none:37；BehaviorR1ProDriver:44。
+
+三、公共机器人接口（3）
+------------------------------------------------
+
+[033] M robot/controller.py
+  功能/改动：唯一相对原版的逻辑改动是 _publish_runtime_state 的 UTC 时间戳格式：避免 '+00:00Z'，输出标准 Z。不是另外写了一个 BEHAVIOR Controller 主循环。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：281行。
+  代码入口（名称:当前行）：_log:36；_load_scene:41；load_driver_config:45；_publish_runtime_state:60；_install_profile:77；_driver_kwargs_for_workspace:89；watch_loop:101；_poll_once:146；main:228。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -70 +70,3 @@ def _publish_runtime_state(driver: BaseDriver, path: Path) -> None:
+
+[034] M robot/drivers/__init__.py
+  功能/改动：DRIVER_REGISTRY 新增 behavior_r1pro -> BehaviorR1ProDriver；原 libero_mujoco 仍保留。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：42行。
+  代码入口（名称:当前行）：load_driver:18；list_drivers:40。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -12,0 +13 @@ DRIVER_REGISTRY: dict[str, str] = {
+
+[035] M robot/mujoco_simulation/scene_io.py
+  功能/改动：save_robot_state_doc：ROBOT_STATE.md 从直接 write_text 改为临时文件+os.replace 原子替换。此公共函数仍被 LIBERO 使用，修改不只影响 BEHAVIOR。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：229行。
+  代码入口（名称:当前行）：_pose_utils:17；_load_json_block:23；load_robot_state_doc:37；default_robot_state_doc:42；save_robot_state_doc:52；merge_robot_state_doc:79；load_scene_from_md:121；ExternalAssetConfig:129；NormalizedSceneConfig:139；SceneConfigParser:143；SceneConfigParser.parse:146；SceneConfigParser._parse_asset_group:162；SceneConfigParser._parse_assets_from_objects:205。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -6,0 +7 @@ import json
+    @@ -52 +53,7 @@ def save_robot_state_doc(path: Path, robot_state: dict[str, Any]) -> None:
+    @@ -66 +73,4 @@ def save_robot_state_doc(path: Path, robot_state: dict[str, Any]) -> None:
+
+四、构型 profile 与评测配置（6）
+------------------------------------------------
+
+[036] A dev/behavior_agent_eval.json
+  功能/改动：新增 BEHAVIOR 网关/超时/动作预算/官方指令/三路 RGB-D 标定/URDF 配置；现已去掉 surface_facing。默认端口8000、上游8011，使用 R1Pro 相机内参。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：36行。
+
+[037] A dev/behavior_r1pro_openpi.yaml
+  功能/改动：新增供官方 evaluator 使用的 R1Pro 机器人配置，以官方配置为基础对齐运行机器人名/相机键；列出proprio、底盘/关节/夹爪控制器、初始姿态和23维动作契约。米制RGB-D另由RGBDFullResWrapper及观测发布器配合提供；不是主Agent提示词。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：128行。
+
+[038] A robot/profiles/AGENTS.md
+  功能/改动：源码维护说明：英文 profile 是运行源，中文是翻译副本；要求同步语义、动作/JSON和英文SHA256，并跑翻译测试。不是运行时任务规划 prompt。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：14行。
+
+[039] A robot/profiles/behavior_r1pro.md
+  功能/改动：新增 BEHAVIOR 运行 profile：坐标/观测、radio外观与红关绿开标记、委派信息、默认粗接近/IK/VLA分工、全部支持动作、缓存交接及官方成功语义。已删强制对齐、face_surface 和左手优先。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：325行。
+
+[040] A robot/profiles/behavior_r1pro.zh-CN.md
+  功能/改动：英文运行 profile 的中文翻译和 SHA256 校验；主 Agent 不直接加载这份中文。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：286行。
+
+[041] ? robot/profiles/behavior_r1pro_navigation.md
+  功能/改动：仅导航实验 profile：禁止VLA完成操作，允许主 Agent 选择VLN/姿态及子 Agent观察；不是正常完整任务 profile。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：91行。
+
+五、公共模型服务（4）
+------------------------------------------------
+
+[042] M external_model_server/sam3_backend.py
+  功能/改动：SAM3Backend 新增公共 preload()，统一模型服务预加载调用。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：481行。
+  代码入口（名称:当前行）：_load_safetensors_checkpoint:24；_build_sam3_model:46；SAM3Backend:67；SAM3Backend.__init__:70；SAM3Backend.preload:80；SAM3Backend.segment_view:87；SAM3Backend.segment_views_batched:100；SAM3Backend.save_result:162；SAM3Backend._segment_targets_batched:226；SAM3Backend._segment_many_targets_batched:238；SAM3Backend._build_target_masks_from_processed:303；SAM3Backend._load_processor:411；SAM3Backend._warmup_processor:463。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -79,0 +80,7 @@ class SAM3Backend:
+
+[043] M external_model_server/sam3_server.py
+  功能/改动：SAM3InferenceService 支持 official/transformers 后端、统一 preload、metadata 中公布后端/mask阈值；CLI 增加 --backend/--mask-threshold。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：208行。
+  代码入口（名称:当前行）：_positive_int:15；_non_negative_float:22；SAM3InferenceService:29；SAM3InferenceService.__init__:32；SAM3InferenceService.metadata:59；SAM3InferenceService.infer:71；SAM3InferenceService.batch_key:74；SAM3InferenceService.infer_batch:82；SAM3InferenceService._parse_request:112；_serialize_sam3_result:144；build_arg_parser:164；main:181。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -40 +40,9 @@ class SAM3InferenceService:
+    @@ -42 +50,3 @@ class SAM3InferenceService:
+    @@ -46,7 +56 @@ class SAM3InferenceService:
+    @@ -57,0 +62 @@ class SAM3InferenceService:
+    @@ -62,0 +68 @@ class SAM3InferenceService:
+    @@ -160,0 +167 @@ def build_arg_parser() -> argparse.ArgumentParser:
+    @@ -164,0 +172 @@ def build_arg_parser() -> argparse.ArgumentParser:
+    @@ -180,0 +189 @@ def main(argv: Sequence[str] | None = None) -> None:
+    @@ -182,0 +192 @@ def main(argv: Sequence[str] | None = None) -> None:
+
+[044] A external_model_server/sam3_transformers_backend.py
+  功能/改动：新增本地 Transformers SAM3 checkpoint 后端，输出适配原有分割协议，含候选缺失和mask处理。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：190行。
+  代码入口（名称:当前行）：TransformersSAM3Backend:14；_targets_from_result:122；_missing_target:183；_to_numpy:187。
+
+[045] M scripts/model_server/start_external_model_servers.sh
+  功能/改动：公共启动器增加standard/behavior_b1k/behavior_champion三模式，冠军映射与独立Python/cwd；SAM3可用独立Python及Transformers后端。公共默认SAM3置信阈值现为0.3，会影响LIBERO共享服务。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：624行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -10,0 +11,2 @@ OPENPI_PYTHON="${OPENPI_PYTHON:-}"
+    @@ -11,0 +14,2 @@ PERCEPTION_ENV="${PERCEPTION_ENV:-EmergePolicy}"
+    @@ -29,0 +34,6 @@ OPENPI_CHECKPOINT="${OPENPI_CHECKPOINT:-${REPO_ROOT}/checkpoints/pi05_libero}"
+    @@ -37,0 +48,3 @@ SAM3_CHECKPOINT="${SAM3_CHECKPOINT:-${REPO_ROOT}/checkpoints/sam3/model.pt}"
+    @@ -78,0 +92,4 @@ OpenPI:
+    @@ -86,0 +104,9 @@ OpenPI:
+    @@ -93,0 +120,4 @@ VGGT and SAM3 runtime:
+    @@ -107 +137 @@ SAM3:
+    @@ -108,0 +139,3 @@ SAM3:
+    @@ -391,0 +425,26 @@ if service_enabled openpi; then
+    @@ -397,0 +457 @@ if service_enabled sam3; then
+    @@ -413,11 +473,13 @@ if service_enabled openpi; then
+    @@ -425,0 +488 @@ if service_enabled openpi; then
+    @@ -427,4 +490,13 @@ if service_enabled openpi; then
+    @@ -431,0 +504 @@ if service_enabled openpi; then
+    @@ -432,0 +506,22 @@ if service_enabled openpi; then
+    @@ -449,8 +544,9 @@ if service_enabled sam3; then
+    @@ -457,0 +554,22 @@ if service_enabled sam3; then
+
+六、BEHAVIOR 上的 LightNav 适配（13）
+------------------------------------------------
+
+[046] A integrations/lightnav_behavior/README.md
+  功能/改动：新增 BEHAVIOR LightNav probe、影子观察、实际导航与身体观察实验的使用说明；本轮去掉的不是这套导航。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：255行。
+
+[047] A integrations/lightnav_behavior/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[048] A integrations/lightnav_behavior/checks/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[049] A integrations/lightnav_behavior/checks/test_probe.py
+  功能/改动：头部图片读取、JPEG编码与路径边界回归。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：52行。
+  代码入口（名称:当前行）：HeadFrameTest:13。
+
+[050] A integrations/lightnav_behavior/probe.py
+  功能/改动：HeadFrame/load_head_frame 校验并读取观测清单中的头部图像，编码JPEG；CLI 可做单帧 LightNav 推理，不控制底盘。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：109行。
+  代码入口（名称:当前行）：HeadFrame:22；load_head_frame:32；parse_args:72；main:82。
+
+[051] ? Emerge/skills/lightnav/SKILL.md
+  功能/改动：当前内置通用导航技能：主 Agent 自主调用 navigate_vln、选择指令/预算，并根据子 Agent 视觉反馈继续或交接；不保证避障、到位或固定先导航。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：43行。
+
+[052] ? integrations/lightnav_behavior/arrival.py
+  功能/改动：旧固定交接实验的 verify_radio_handoff：SAM3 分割radio并用RGB-D距离阈值判断是否允许交接。带 radio 专用先验；不是正常 Agent 驱动的必经流程，当前仍留在仓库。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：72行。
+  代码入口（名称:当前行）：verify_radio_handoff:18。
+
+[053] ? integrations/lightnav_behavior/checks/test_active_navigation.py
+  功能/改动：30Hz/4Hz适配、23维保持、闭环同步/预算/停止及旧到位门槛回归。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：194行。
+  代码入口（名称:当前行）：R1ProAdapterTests:20；ClosedLoopTests:42；ArrivalTests:146。
+
+[054] ? integrations/lightnav_behavior/checks/test_preview.py
+  功能/改动：只读预览、新帧/会话保留和不执行动作回归。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：135行。
+  代码入口（名称:当前行）：publish:18；FakeClient:35；PreviewTests:51。
+
+[055] ? integrations/lightnav_behavior/closed_loop.py
+  功能/改动：run_closed_loop：单一导航调用内部保留模型会话、按新画面预测路点、下发有界底盘动作，保存帧/trace，处理预算/模型停止/终帧同步。不会自行安排主 Agent 的技能顺序。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：155行。
+  代码入口（名称:当前行）：run_closed_loop:10。
+
+[056] ? integrations/lightnav_behavior/preview.py
+  功能/改动：LightNavPreviewTool：只读影子推理，保留会话/帧和预测，不执行机器人动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：198行。
+  代码入口（名称:当前行）：LightNavPreviewTool:28。
+
+[057] ? integrations/lightnav_behavior/r1pro_adapter.py
+  功能/改动：frame_action_steps 使30Hz动作对应约4Hz模型帧；waypoint_action 把机器人局部 dx/dy/dyaw 转成官方归一化底盘速度，其余关节保持；带数值校验和限速。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：54行。
+  代码入口（名称:当前行）：frame_action_steps:14；waypoint_action:21。
+
+[058] ? integrations/lightnav_behavior/workspace_skill/SKILL.md
+  功能/改动：旧影子观察 workspace 专用技能，教 Agent 调用 LightNav 预览；不等于当前可执行导航技能。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：28行。
+
+七、原 humanoid-dev 自带的 G1 / SONIC 集成（40）
+------------------------------------------------
+
+[059] A apply_docs/01_EMERGE_Policy论文与代码架构.md
+  功能/改动：humanoid-dev原已包含的中文调研/环境/导航集成说明：01_EMERGE_Policy论文与代码架构.md；不执行评测或改变策略。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：293行。
+
+[060] A apply_docs/02_环境配置.md
+  功能/改动：humanoid-dev原已包含的中文调研/环境/导航集成说明：02_环境配置.md；不执行评测或改变策略。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：230行。
+
+[061] A apply_docs/03_LightNav0_SONIC导航Skill接入方案.md
+  功能/改动：humanoid-dev原已包含的中文调研/环境/导航集成说明：03_LightNav0_SONIC导航Skill接入方案.md；不执行评测或改变策略。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：569行。
+
+[062] A apply_docs/04_导航Skill执行与测试终端指令.md
+  功能/改动：humanoid-dev原已包含的中文调研/环境/导航集成说明：04_导航Skill执行与测试终端指令.md；不执行评测或改变策略。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：387行。
+
+[063] A apply_docs/05_导航Skill实现文件与改动说明.md
+  功能/改动：humanoid-dev原已包含的中文调研/环境/导航集成说明：05_导航Skill实现文件与改动说明.md；不执行评测或改变策略。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：97行。
+
+[064] A apply_docs/README.md
+  功能/改动：humanoid-dev原已包含的中文调研/环境/导航集成说明：README.md；不执行评测或改变策略。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：24行。
+
+[065] A integrations/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[066] A integrations/lightnav_sonic_emerge/Emerge_plugin.toml
+  功能/改动：外部驱动插件清单，注册SONIC-LightNav驱动；不是自动启用所有机器人。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：12行。
+
+[067] A integrations/lightnav_sonic_emerge/README.md
+  功能/改动：原G1 LightNav–SONIC集成运行文档与验证边界。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：444行。
+
+[068] A integrations/lightnav_sonic_emerge/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：5行。
+
+[069] A integrations/lightnav_sonic_emerge/bridge/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：22行。
+
+[070] A integrations/lightnav_sonic_emerge/bridge/adapter.py
+  功能/改动：LightNav局部路点到SONIC全身规划指令的坐标/速度/朝向转换与限幅；G1专用执行适配。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：211行。
+  代码入口（名称:当前行）：AdapterLimits:25；SonicPlannerCommand:52；_finite_scalar:70；_clip:79；_wrap_angle:83；LightNav2SonicAdapter:87。
+
+[071] A integrations/lightnav_sonic_emerge/bridge/cli.py
+  功能/改动：从响应JSON转换SONIC命令的命令行工具。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：59行。
+  代码入口（名称:当前行）：build_parser:14；_load_response:23；main:35。
+
+[072] A integrations/lightnav_sonic_emerge/bridge/lightnav_ws.py
+  功能/改动：LightNav消息协议、握手/初始化/重置/序号/路点解析和同步WebSocket客户端；后续又增加可选请求超时与visible字段保留，BEHAVIOR复用此客户端。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；当前还包含未提交内容。
+  当前文件：210行。
+  代码入口（名称:当前行）：LightNavProtocolError:13；_is_int:17；_finite_float:21；LightNavReply:31；_response_data:48；parse_next_response:64；LightNavWsClient:117。
+
+[073] A integrations/lightnav_sonic_emerge/bridge/procthor_scene.py
+  功能/改动：将ProcTHOR房间/环境MJCF合成到G1仿真场景并处理资源、静态环境及接触配置。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：163行。
+  代码入口（名称:当前行）：_freeze_environment_joints:22；_absolute_environment_file_paths:31；_append_environment_defaults:49；_append_environment_assets:61；_append_environment_worldbody:82；_append_environment_contacts:107；_copy_contact_capacity:118；compose_procthor_g1_scene:128。
+
+[074] A integrations/lightnav_sonic_emerge/bridge/requirements.txt
+  功能/改动：桥接脚本所需轻量Python依赖清单。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：4行。
+
+[075] A integrations/lightnav_sonic_emerge/bridge/room_scene.py
+  功能/改动：合成简单房间测试场景及第一视角相机。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：168行。
+  代码入口（名称:当前行）：_add_geom:13；_add_materials:38；_materialize_direct_includes:56；add_lightnav_ego_camera:80；compose_lightnav_room_scene:117。
+
+[076] A integrations/lightnav_sonic_emerge/bridge/room_sim.py
+  功能/改动：启动房间/G1测试模拟程序入口。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：183行。
+  代码入口（名称:当前行）：build_parser:19；main:63。
+
+[077] A integrations/lightnav_sonic_emerge/bridge/runner.py
+  功能/改动：原G1/SONIC闭环：ZMQ订阅相机和yaw，调用LightNav，转成SONIC指令发布；不是R1Pro运行driver。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：318行。
+  代码入口（名称:当前行）：extract_jpeg_from_camera_message:32；yaw_from_wxyz:54；SonicCameraSubscriber:75；SonicYawSubscriber:124；_command_log:175；_safe_idle:184；build_parser:194；run:221；main:313。
+
+[078] A integrations/lightnav_sonic_emerge/bridge/sonic_zmq.py
+  功能/改动：SONIC ZMQ command/planner包头和序列化、激活/发布/空闲指令。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：136行。
+  代码入口（名称:当前行）：_finite_vector:24；_header:35；build_command_packet:45；build_planner_packet:60；SonicZmqPublisher:88。
+
+[079] A integrations/lightnav_sonic_emerge/bridge/teleop.py
+  功能/改动：G1/SONIC测试键盘遥控，生成同一planner协议。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：255行。
+  代码入口（名称:当前行）：wrap_angle:27；TeleopState:34；command_from_state:65；CbreakInput:104；build_parser:135；_validate_args:148；_print_help:163；_handle_key:170；run:201；main:250。
+
+[080] A integrations/lightnav_sonic_emerge/checks/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[081] A integrations/lightnav_sonic_emerge/checks/bridge/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：0行。
+
+[082] A integrations/lightnav_sonic_emerge/checks/bridge/test_adapter.py
+  功能/改动：原G1导航集成的离线测试：G1路点/坐标/yaw/限速转换。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：64行。
+  代码入口（名称:当前行）：LightNav2SonicAdapterTests:11。
+
+[083] A integrations/lightnav_sonic_emerge/checks/bridge/test_lightnav_ws.py
+  功能/改动：原G1导航集成的离线测试：LightNav回复合法性、序号/visible/超时。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；当前还包含未提交内容。
+  当前文件：85行。
+  代码入口（名称:当前行）：_response:11；LightNavResponseTests:27。
+
+[084] A integrations/lightnav_sonic_emerge/checks/bridge/test_runner.py
+  功能/改动：原G1导航集成的离线测试：G1相机输入和yaw协议。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：32行。
+  代码入口（名称:当前行）：RunnerInputTests:8。
+
+[085] A integrations/lightnav_sonic_emerge/checks/bridge/test_sonic_zmq.py
+  功能/改动：原G1导航集成的离线测试：SONIC二进制/数组消息布局。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：50行。
+  代码入口（名称:当前行）：_header:9；SonicZmqPacketTests:14。
+
+[086] A integrations/lightnav_sonic_emerge/checks/bridge/test_teleop.py
+  功能/改动：原G1导航集成的离线测试：SONIC键盘遥控命令。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：37行。
+  代码入口（名称:当前行）：TeleopCommandTests:8。
+
+[087] A integrations/lightnav_sonic_emerge/checks/test_driver.py
+  功能/改动：原G1导航集成的离线测试：G1外部driver运行状态与动作约束。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：109行。
+  代码入口（名称:当前行）：_Backend:11；_TestDriver:31；SonicLightNavDriverTest:40。
+
+[088] A integrations/lightnav_sonic_emerge/checks/test_enqueue_navigation.py
+  功能/改动：原G1导航集成的离线测试：G1导航队列入队与活动动作拒绝。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：44行。
+  代码入口（名称:当前行）：EnqueueNavigationTest:11。
+
+[089] A integrations/lightnav_sonic_emerge/checks/test_navigation_backend.py
+  功能/改动：原G1导航集成的离线测试：G1导航会话、预算、取消、过期输入与空闲收尾。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：182行。
+  代码入口（名称:当前行）：_SequenceSource:14；_Publisher:28；_Client:48；_Adapter:66；_Writer:74；_reply:82；NavigationBackendTest:86。
+
+[090] A integrations/lightnav_sonic_emerge/checks/test_observation_writer.py
+  功能/改动：原G1导航集成的离线测试：G1图像和manifest发布。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：47行。
+  代码入口（名称:当前行）：_jpeg_bytes:14；EgoObservationWriterTest:20。
+
+[091] A integrations/lightnav_sonic_emerge/checks/test_plugin.py
+  功能/改动：原G1导航集成的离线测试：G1外部插件清单注册和驱动加载。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：30行。
+  代码入口（名称:当前行）：LightNavSonicPluginTest:12。
+
+[092] A integrations/lightnav_sonic_emerge/driver.py
+  功能/改动：SonicLightNavDriver：原EMERGE驱动接口上的G1导航执行器，与BEHAVIOR R1Pro驱动是两套adapter。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：235行。
+  代码入口（名称:当前行）：SonicLightNavDriver:21。
+
+[093] A integrations/lightnav_sonic_emerge/driver_procthor.json
+  功能/改动：G1/ProcTHOR导航实验驱动配置。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：16行。
+
+[094] A integrations/lightnav_sonic_emerge/enqueue_navigation.py
+  功能/改动：往原EMERGE ACTION.md动作队列写导航指令的小工具。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：74行。
+  代码入口（名称:当前行）：enqueue:15；build_parser:52；main:61。
+
+[095] A integrations/lightnav_sonic_emerge/navigation_backend.py
+  功能/改动：G1导航backend：会话、传感器输入、预算/取消、ZMQ planner和停止处理。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：302行。
+  代码入口（名称:当前行）：NavigationConfig:22；NavigationResult:54；NavigationBackend:69。
+
+[096] A integrations/lightnav_sonic_emerge/observation_writer.py
+  功能/改动：把G1/SONIC第一视角JPEG写成EMERGE观测清单。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：86行。
+  代码入口（名称:当前行）：EgoObservationWriter:15。
+
+[097] A integrations/lightnav_sonic_emerge/profile_lightnav_sonic_g1.md
+  功能/改动：G1导航构型说明/动作契约。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：59行。
+
+[098] A integrations/lightnav_sonic_emerge/workspace_skill/SKILL.md
+  功能/改动：原G1 workspace导航技能说明，和当前内置通用lightnav技能不是同一文件。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：40行。
+
+八、BEHAVIOR 评测与实验脚本（13）
+------------------------------------------------
+
+[099] A scripts/Behavior_eval/README.md
+  功能/改动：新增 baseline、Agent、影子、服务启动、结果目录/检查的说明；本轮删除 face_surface 使用章节。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：307行。
+
+[100] A scripts/Behavior_eval/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[101] A scripts/Behavior_eval/eval_behavior_agent.py
+  功能/改动：新增 BEHAVIOR 生命周期编排器：官方 evaluator、原 Controller/driver 和原 EMERGE headless运行时；准备workspace/profile，检查服务/端口，转译官方结果，恢复Agent会话，保存日志与视频，支持 navigation_only。不是新的LLM推理循环，但会决定启动、反馈续跑、墙钟和何时收尾。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：1252行。
+  代码入口（名称:当前行）：parse_args:83；_prepare_workspace:235；_load_driver_config:243；_execution_timeout:255；_episode_driver_config:260；_write_running_evaluation_status:302；_read_official_result:327；_write_completed_evaluation_status:359；_write_evaluator_error_status:388；_evaluator_command:406；_agent_message:452；_feedback_message:469；_agent_runtime_config:485；_validate_agent_provider:499；_validate_behavior_perception:548；_validate_lightnav:569；_validate_external_openpi:590；_start_agent:600；_read_agent_result:650；_drain_agent_events:657；_record_agent_result:707；_settle_agent:723；_gracefully_stop_evaluator:739；_render_navigation_video:760；_navigation_summary:782；_actions_settled:798；_resume_decision:819；main:856。
+
+[102] A scripts/Behavior_eval/run_champion_baseline.sh
+  功能/改动：新增单任务冠军 baseline 脚本：public_test index0..9串行，官方 evaluator直连冠军8011，不启动主Agent；每例日志/JSON/视频，已有结果跳过，中断不继续下一例。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：125行。
+
+[103] A scripts/Behavior_eval/run_checkpoint_baseline.sh
+  功能/改动：新增 checkpoint级 Bash：读取 task_checkpoint_mapping 和官方任务表，逐任务调用 run_champion_baseline.sh；checkpoint2当前16任务共160例，可 --list-only。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：133行。
+
+[104] A scripts/Behavior_eval/run_emerge_shadow.sh
+  功能/改动：新增无控制透传网关观察脚本：冠军直接决定动作，额外发布EMERGE观测；不让Agent干预动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：142行。
+
+[105] A scripts/Behavior_eval/runner_common.py
+  功能/改动：新增共享运行辅助：路径/新输出目录/端口校验，环境隔离、进程组启停、健康检查、原子JSON、workspace准备/状态读取。存在实际中断遗留进程的现象，不能只因测试通过就宣称清理已可靠。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：296行。
+  代码入口（名称:当前行）：require_path:26；require_executable:33；assert_fresh_output_dir:43；assert_port_available:65；behavior_environment:81；spawn_process:90；_group_exists:107；_signal_group:117；stop_process_group:122；wait_for_health:156；health_ok:176；service_health_ok:185；wait_for_process:207；read_json:223；atomic_write_json:231；wait_for_condition:242；prepare_workspace:265；robot_state_section:290。
+
+[106] A scripts/Behavior_eval/start_behavior_services.sh
+  功能/改动：BEHAVIOR 服务启动包装：指定冠军fork、其.venv、checkpoint2/映射、8011，复用公共启动脚本；默认openpi,sam3，不包含LightNav服务自动启动。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：21行。
+
+[107] ? scripts/Behavior_eval/run_lightnav_handoff.py
+  功能/改动：旧固定 LightNav->SAM3到位验证->冠军VLA消融runner，顺序由脚本固定，非正常自主Agent流程。radio专用，仍保留代码，不能当作当前EMERGE接入入口。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：298行。
+  代码入口（名称:当前行）：parse_args:52；preflight:79；_render_navigation_video:108；run:122。
+
+[108] ? scripts/Behavior_eval/run_lightnav_shadow.py
+  功能/改动：新增LightNav影子实验：向只读观察Agent提供预览工具/技能，记录推理，不接管冠军动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：282行。
+  代码入口（名称:当前行）：install_preview_skill:57；build_preview_observer:65；parse_args:86；preflight:107；run:135。
+
+[109] ? scripts/Behavior_eval/run_location_shadow.py
+  功能/改动：新增定位影子实验：主Agent自主选择是否调用object_location；动作仍完全由冠军执行，记录是否调用与定位结果。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：244行。
+  代码入口（名称:当前行）：build_observer:53；parse_args:70；preflight:90；run:112。
+
+[110] ? scripts/Behavior_eval/run_radio_agent_public10.sh
+  功能/改动：新增radio十例Agent实验Bash封装：逐例调用正常eval_behavior_agent，GUI/视频/事件；只跳过完整官方结果，保留不完整目录，Ctrl+C终止批次，不选择Agent动作。未显式覆盖 runner默认反馈轮数2。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：112行。
+
+[111] ? scripts/Behavior_eval/shadow_common.py
+  功能/改动：WatchObservationTool、影子网关命令和只读workspace准备；给旁路Agent等待新观测，不发动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：99行。
+  代码入口（名称:当前行）：WatchObservationTool:21；gateway_command:65；prepare_observer_workspace:78。
+
+九、BEHAVIOR 离线测试和结果核验（20）
+------------------------------------------------
+
+[112] A scripts/Behavior_eval/checks/__init__.py
+  功能/改动：新增Python包/测试包标识或导出入口，不单独安排Agent动作。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：1行。
+
+[113] A scripts/Behavior_eval/checks/test_action_queue.py
+  功能/改动：新增离线回归/核验：真实本机假WebSocket服务上的Controller动作队列/取消、精确指令、状态同步以及废弃模式拒绝。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：409行。
+  代码入口（名称:当前行）：_free_port:43；_pack_array:49；_camera_message:58；_AutoReplyOpenPIServer:70；ControllerQueueIntegrationTest:115；ControllerCancellationIntegrationTest:312；_CancelAwareGateway:389。
+
+[114] A scripts/Behavior_eval/checks/test_agent_plan.py
+  功能/改动：新增离线回归/核验：Agent计划、workspace消息、profile分工契约；不是运行时调度器。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：162行。
+  代码入口（名称:当前行）：BehaviorAgentPlanTest:34。
+
+[115] A scripts/Behavior_eval/checks/test_driver.py
+  功能/改动：新增离线回归/核验：R1Pro动作参数、VLA/导航/姿态/IK/计时/同步/错误与官方结果契约。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：927行。
+  代码入口（名称:当前行）：_make_driver:28；_FakeGateway:34；_status_payload:152；BehaviorDriverContractTest:169；BehaviorDriverReadinessTest:694；BehaviorDriverResultTest:765。
+
+[116] A scripts/Behavior_eval/checks/test_gateway.py
+  功能/改动：新增离线回归/核验：透传、门控、预算、取消、握手、连接归属、缓存失效以及新观测同步。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：847行。
+  代码入口（名称:当前行）：_free_port:22；CacheCapabilityTest:28；_FakeOpenPIServer:41；B1KProxyGatewayTest:90；ObservationPublisherTest:262；_pack_array:305；_camera_message:314；_r1pro_message:326；_unpack_array:349；_ControllableOpenPIServer:359；ControlledExecutionOwnershipTest:433；ObservationSynchronizationTest:774。
+
+[117] A scripts/Behavior_eval/checks/test_object_location.py
+  功能/改动：新增离线回归/核验：BEHAVIOR观测到RGB-D定位的兼容、候选mask和实测几何输出。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：557行。
+  代码入口（名称:当前行）：_pack_array:27；_calibration:36；_publish_behavior_observation:50；_RecordingClient:82；BehaviorObjectLocationCompatibilityTest:92。
+
+[118] A scripts/Behavior_eval/checks/test_observation.py
+  功能/改动：新增离线回归/核验：三路相机/RGB-D/proprio、版本/标定/重置和保持动作发布。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：371行。
+  代码入口（名称:当前行）：_pack_array:19；_camera_message:28；ObservationPublisherTest:72。
+
+[119] A scripts/Behavior_eval/checks/test_precontact.py
+  功能/改动：新增离线回归/核验：包围盒预接触点/选手/朝向几何。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：71行。
+  代码入口（名称:当前行）：_robot_state:12；PrecontactGeometryTest:27。
+
+[120] A scripts/Behavior_eval/checks/test_profile_translation.py
+  功能/改动：新增离线回归/核验：英文SHA256、中英动作/JSON同步及没有默认左右手偏好。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：52行。
+  代码入口（名称:当前行）：R1ProProfileTranslationTest:20。
+
+[121] A scripts/Behavior_eval/checks/test_r1pro_kinematics.py
+  功能/改动：新增离线回归/核验：URDF/FK、精确与粗接近IK、关节/身体姿态。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：121行。
+  代码入口（名称:当前行）：R1ProKinematicsTest:23。
+
+[122] A scripts/Behavior_eval/checks/test_r1pro_motion.py
+  功能/改动：新增离线回归/核验：局部机械臂/夹爪/姿态轨迹、coarse、steps/settle_steps及失败契约。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：307行。
+  代码入口（名称:当前行）：_state:27；R1ProMotionPlanningTest:40。
+
+[123] A scripts/Behavior_eval/checks/test_rgbd_geometry.py
+  功能/改动：新增离线回归/核验：mask深度反投影、坐标变换、可见表面包围盒和异常输入。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：128行。
+  代码入口（名称:当前行）：RGBDGeometryTest:20。
+
+[124] A scripts/Behavior_eval/checks/test_runner.py
+  功能/改动：新增离线回归/核验：CLI、服务前置检查、进程监督/端口/输出目录、官方结果桥接、恢复续跑、视频收尾。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：946行。
+  代码入口（名称:当前行）：_pid_state:62；_alive:71；RunnerCliTest:76；NavigationVideoShutdownTest:148；PerceptionPreflightTest:200；ProcessSupervisionTest:271；PortAndOutputDirectoryTest:332；NativeDriverConfigurationTest:368；OfficialResultBridgeTest:542；EpisodeVerdictTest:618；ResumeDecisionTest:675；AgentWorkspacePreparationTest:761；VerifyArtifactsTest:783。
+
+[125] A scripts/Behavior_eval/checks/test_sam3_backend.py
+  功能/改动：新增离线回归/核验：Transformers SAM3结果与统一服务接口。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：124行。
+  代码入口（名称:当前行）：TransformersSAM3ResultTest:14；_FakeBackend:52；SAM3InferenceServiceTest:83。
+
+[126] A scripts/Behavior_eval/checks/test_verification_observation.py
+  功能/改动：新增离线回归/核验：专用验证观测优先及公共视觉监控单/多视角选择。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：180行。
+  代码入口（名称:当前行）：VerificationObservationStoreTest:19；_ImmediateFuture:83；VisualMonitorCameraSelectionTest:88。
+
+[127] A scripts/Behavior_eval/checks/verify_artifacts.py
+  功能/改动：新增离线回归/核验：评测后手动检查官方状态/JSON、图像/深度来源、Agent结果是否相互一致；不是主Agent策略。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：205行。
+  代码入口（名称:当前行）：_read_json:33；verify:41；main:171。
+
+[128] ? scripts/Behavior_eval/checks/test_lightnav_shadow.py
+  功能/改动：新增离线回归/核验：LightNav影子观察工具/runner不执行动作的约束。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：74行。
+  代码入口（名称:当前行）：LightNavShadowTests:22。
+
+[129] ? scripts/Behavior_eval/checks/test_location_shadow.py
+  功能/改动：新增离线回归/核验：定位影子观察runner/工具和无控制约束。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：64行。
+  代码入口（名称:当前行）：LocationShadowTests:22。
+
+[130] ? scripts/Behavior_eval/checks/test_policy_control.py
+  功能/改动：新增离线回归/核验：从冠军环境运行真实wrapper/server缓存失效回归，验证保留stage、不产生额外回复。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：29行。
+  代码入口（名称:当前行）：ChampionPolicyControlTest:14。
+
+[131] ? scripts/Behavior_eval/checks/test_radio_agent_public10.py
+  功能/改动：新增离线回归/核验：假runner测试十例封装、完整结果跳过、不完整保留、中断传播；不启动正式仿真。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+  当前文件：100行。
+  代码入口（名称:当前行）：RadioAgentPublic10Test:35。
+
+十、子模块入口（3）
+------------------------------------------------
+
+[132] A third_party/behavior-1k
+  功能/改动：新增官方子模块，固定6cbf70b075816096e9be53958780769f3264d25d；当前子模块工作区干净，官方eval.py没有本地修改。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+
+
+[133] A third_party/behavior-1k-solution
+  功能/改动：新增冠军fork子模块，固定520efe11b16596d6ba2096bd2c54b137be92a01f；另有未提交的动作缓存失效协议/测试，见下方子模块展开。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；当前还包含未提交内容。
+
+
+[134] A third_party/lightnav-0
+  功能/改动：新增原版LightNav子模块，固定3015508b70fb6e30bbd66701e94c9b916dcb8df8；当前工作区干净，适配代码位于EMERGE外层。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+
+
+十一、仓库管理及其它文档（4）
+------------------------------------------------
+
+[135] M .gitignore
+  功能/改动：新增 .env.*、输出/日志和常见权重后缀忽略；取消整目录 test/tests 忽略，允许回归测试进入版本控制。*.pyc 等字节码忽略仍保留。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：35行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -4 +4,2 @@
+    @@ -23,2 +23,0 @@ nano.*.save
+    @@ -29 +28,8 @@ artifacts/
+
+[136] M .gitmodules
+  功能/改动：新增 BEHAVIOR 官方评测、冠军方案和 LightNav 三个子模块 URL。原有 LIBERO、SAM3、VGGT 等入口未删除。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：35行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -26,0 +27,9 @@
+
+[137] M README.md
+  功能/改动：加入 humanoid-dev LightNav–SONIC 介绍、fork 克隆命令，以及 BEHAVIOR 评测文档入口。
+  来源：在9a862bd分支快照已经存在该差异；后续仍可能有叠加修改；相对HEAD无额外未提交内容。
+  当前文件：164行。
+  相对初版的精确diff块（-旧行/+当前行）：
+    @@ -43,0 +44,16 @@ continuous interaction.*
+    @@ -50,2 +66,3 @@ git clone --recurse-submodules \
+    @@ -146,0 +164 @@ For additional startup options and health-check endpoints, see
+
+[138] A docs/HUMANOID_REFACTOR_PLAN.md
+  功能/改动：新增人形机器人扩展/解耦规划文档，不是已验证的运行功能。
+  来源：初始main及当时humanoid-dev基线均未包含这一差异；相对HEAD无额外未提交内容。
+  当前文件：159行。
+
+十二、冠军子模块内的独立改动（不能只看主仓库的一个m）
+------------------------------------------------------
+路径前缀：third_party/behavior-1k-solution/
+该仓库原冠军快照：ca556f7；当前HEAD：520efe1。
+相对ca556f7：14个已跟踪差异路径，外加1个未跟踪测试文件。
+相对其当前HEAD：2个Python文件未提交，tests/test_policy_control.py未跟踪。
+
+1. .gitignore
+   增加*.egg-info/，不将editable安装产物入库。
+2. .gitmodules
+   openpi子模块URL从wensi-ai/openpi换为hrm-666/openpi。
+3. openpi（gitlink）
+   指向兼容性修复后的bf737cd，见下一节。
+4. scripts/serve_b1k.py
+   不再从OmniGibson导入服务器/数据集元信息，改用独立WebSocket服务；
+   已加载的初始checkpoint登记到CheckpointSwitcher，避免首请求重复加载同一权重。
+5. src/b1k/policies/b1k_policy.py
+   extract_state_from_proprio改从本地eval_compat复用，不再依赖环境里某一版OG索引。
+6. src/b1k/policies/checkpoint_switcher.py
+   映射文件和checkpoint路径expanduser/resolve；相对权重路径以mapping所在目录解释。
+7. src/b1k/shared/eval_b1k_wrapper.py
+   兼容当前相机键、61维及旧256维proprio，剥离单环境batch维；
+   当前明确只支持num_envs=1，不是原先尝试过的多环境并行实现。
+   未提交invalidate_action_cache：只清last_actions/action_index/next_initial_actions；
+   不清task_id/current_stage/prediction_history/step_count/底层policy状态。
+8. src/b1k/shared/eval_compat.py（新增）
+   固定旧/新proprio索引，提取同序23维模型state；观测键别名归一和单环境检查。
+9. src/b1k/shared/eval_compat_test.py（新增）
+   新旧索引、键名、维度及单环境兼容回归。
+10. src/b1k/shared/websocket_policy_server.py（新增）
+    独立msgpack WebSocket服务，metadata/reset/action/healthz协议；
+    当前未提交部分增加invalidate_action_cache能力声明和无额外回复的控制消息，
+    不支持时拒绝回退成完整reset。
+11. src/b1k/training/__init__.py
+    训练模块按需导入，推理时不连带加载datasets/pyarrow等训练依赖。
+12. src/b1k/training/checkpoints.py
+    data_loader导入移到TYPE_CHECKING，减少推理启动依赖。
+13. task_checkpoint_mapping.json
+    四个权重路径从~/models改为../../../checkpoints/behavior_submission_hfmirror/；
+    checkpoint对应task_id列表保持，不是为Agent重新定义阶段。
+14. uv.lock（新增）
+    冠军推理环境依赖锁定，不是模型权重。
+15. tests/test_policy_control.py（未跟踪）
+    缓存失效、stage保留、官方reset和真实本机假服务传输回归。
+
+核验：src/b1k/models/pi_behavior.py、pi_behavior_config.py、
+src/b1k/policies/pi_behavior_policy.py、src/b1k/shared/correction_rules.py
+不在相对ca556f7的变更列表中。冠军已有的任务ID、阶段数/预测及规则机制不是
+本轮新写的EMERGE功能。不要把原冠军模型设计和我们的接入修改混为一谈。
+
+十三、冠军嵌套openpi的独立改动
+---------------------------
+third_party/behavior-1k-solution/openpi
+原冠军指针01177e0 -> 当前bf737cd（该嵌套仓库工作树干净）。
+仅两个兼容性改动：
+  pyproject.toml：增加chex==0.1.89依赖约束。
+  src/openpi/models_pytorch/gemma_pytorch.py：去掉推理模块对pytest的导入，
+    清除past_key_values类型中的pytest.Cache。
+没有在本轮重写Gemma/PI网络或重新训练checkpoint。
+主仓库另一个third_party/openpi指针没有变化，不能和冠军嵌套openpi混淆。
+
+十四、原样保留和没有证据声称验证通过的部分
+---------------------------------------
+1. 官方third_party/behavior-1k工作树干净，未改官方eval.py/环境评分逻辑。
+2. 原third_party/lightnav-0工作树干净；SAM3子模块工作树干净。
+3. scripts/Libero_eval、LiberoPlus_eval、LiberoPro_eval相对初始提交无差异。
+4. robot/drivers/mujoco_driver.py、robot/plugins.py、Emerge/agent/context.py、
+   Emerge/utils/action_queue.py相对初始提交无差异。
+5. 然而“LIBERO专用代码没改”不代表LIBERO行为不受影响：
+   公共工具提示、技能、观测读取器、视觉监控、模型服务及状态写入都发生了变化。
+6. 多个原LIBERO依赖子模块当前未初始化；没有运行完整LIBERO仿真回归，
+   不能用BEHAVIOR离线测试通过替代LIBERO端到端验证。
+7. ~/.Emerge配置、环境变量、Python editable安装指向、模型/资产/输出等
+   不全部属于Git源码；本报告不是它们的完整状态备份，不包含密钥内容。
+
+十五、仍需警惕的耦合和残留（这里只指出，未擅自修复）
+--------------------------------------------------
+A. 明确的LIBERO定位兼容缺口：
+   robot/mujoco_simulation/calibrated_observation.py发布的manifest没有coordinate_frame；
+   当前公共object_location/tools/observation.py却要求非空coordinate_frame。
+   因此原LIBERO观测进入该新读取器会报错。这不是推测“可能提示不同”，是契约不一致。
+B. 公共提示词已经改变：
+   固定整任务VLA指令例外在embodied工具、planning技能、vla技能和profile均存在；
+   RGB-D视角规则也横跨skill/context/tool/engine。不能说全部约束只在profile。
+C. 公共SAM3启动默认confidence_threshold=0.3，原共享启动脚本未显式传这一值；
+   未独立配置时会改变其它benchmark的分割行为。
+D. 旧实验路径仍在：
+   run_lightnav_handoff.py + arrival.py是radio专用固定顺序/SAM3交接实验；
+   preview/workspace_skill和两个shadow runner是旁路实验。
+   它们不是正常eval_behavior_agent的必经阶段，但文件仍存在，容易误用。
+E. 反馈轮数不一致：
+   eval_behavior_agent默认max_agent_feedback_rounds仍是2；
+   本轮手动命令曾显式给100，run_radio_agent_public10.sh当前未显式给此参数。
+   批跑与手动跑的中途停止条件可能不同。未改这个问题。
+F. 中断清理仍有已观察到的缺口：
+   本轮曾发现旧Controller与headless Agent被systemd用户进程收养、继续占8000；
+   已有stop_process_group测试不代表覆盖了全部真实退出路径。本轮未修进程清理。
+G. 手选面错误问题：
+   本轮已整套删除手选三点面->face_surface控制，不是只把enabled设false；
+   旧实验workspace和图片仍包含旧profile/测面记录，属于历史数据，不是现代码接口。
+H. 无主Agent直接视觉输入：
+   主Agent仍经视觉子Agent拿结构化结果。新增更多动作不自动等于理解碰撞/倾倒；
+   本报告不声称上述识别与恢复能力已跑通。
+I. VLA全身控制不受先前IK手别约束：
+   不锁底盘、不固定手别。主Agent选择一次左/右手IK，不会约束冠军后续动作。
+J. 仍有通用小预算建议：
+   vla/SKILL.md保留初始30–40步等原始分段建议，profile也强调分段检查；
+   不能认为“VLA执行颗粒度”问题已经在所有提示层统一改完。
+K. 观测包围盒字段仍叫bbox_world_min_m/max_m，但实际坐标系跟随结果frame，
+   在BEHAVIOR为robot_base；不能仅从字段名推断它是模拟器全局world坐标。
+
+十六、验证和复现
+---------------
+本轮已完成（不运行模拟器、正式模型推理或任务实验）：
+  git diff --check：通过。
+  python -m unittest discover -s scripts/Behavior_eval/checks -p 'test_*.py'：
+    233项通过；其中本机假WebSocket测试在允许本机套接字的环境下运行。
+  python -m unittest discover -s integrations/lightnav_behavior/checks -p 'test_*.py'：
+    15项通过。
+  python -m unittest integrations.lightnav_sonic_emerge.checks.bridge.test_lightnav_ws：
+    8项通过。
+  生产源码中face_surface/measure_surface/surface_facing相关引用清理检查：无匹配。
+以上共256项主仓库离线测试；冠军测试在其中一个测试内部另外调用，
+不能把测试项相加当成真实机器人/模拟器试验次数。
+未commit、未push、未重置历史、未删除实验结果。
+
+自行查看全部精确代码差异：
+  git -c core.quotePath=false diff 1c6accd -- <文件路径>
+  git diff HEAD -- <文件路径>
+  git ls-files --others --exclude-standard
+  git -C third_party/behavior-1k-solution diff ca556f7 -- <文件路径>
+  git -C third_party/behavior-1k-solution/openpi diff 01177e0 -- <文件路径>
+未跟踪文件不会出现在普通git diff中，需直接阅读；上文已逐项列出。
+
+建议的理解顺序（不是新一轮修改计划）
+---------------------------------
+1. 正常生命周期：scripts/Behavior_eval/eval_behavior_agent.py
+2. 动作契约与执行：robot/drivers/behavior_r1pro_driver.py + robot/behavior/gateway.py
+3. 观测/几何：robot/behavior/observation.py + 公共object_location及rgbd_geometry
+4. 动作生成：r1pro_kinematics.py / r1pro_motion.py / lightnav_behavior闭环适配
+5. 提示词：behavior_r1pro.md -> embodied工具 -> planning/vla/lightnav技能 -> 子Agent context
+6. 冠军观测兼容/缓存协议：子模块eval_compat.py、eval_b1k_wrapper.py、websocket_policy_server.py

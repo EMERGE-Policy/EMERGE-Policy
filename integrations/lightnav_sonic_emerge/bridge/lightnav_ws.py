@@ -34,6 +34,7 @@ class LightNavReply:
     seq: int
     waypoints: tuple[tuple[float, float, float], ...]
     stop: bool
+    visible: bool | None = None
     latency_ms: float | None = None
     raw_text: str | None = None
 
@@ -76,6 +77,9 @@ def parse_next_response(payload: Mapping[str, Any], *, expected_seq: int | None 
     stop = data.get("stop")
     if not isinstance(stop, bool):
         raise LightNavProtocolError("LightNav response stop must be boolean")
+    visible = data.get("visible")
+    if visible is not None and not isinstance(visible, bool):
+        raise LightNavProtocolError("LightNav response visible must be boolean or null")
     actions = data.get("actions")
     if not isinstance(actions, Mapping):
         raise LightNavProtocolError("LightNav response actions must be an object")
@@ -104,6 +108,7 @@ def parse_next_response(payload: Mapping[str, Any], *, expected_seq: int | None 
         seq=seq,
         waypoints=tuple(waypoints),
         stop=stop,
+        visible=visible,
         latency_ms=latency_ms,
         raw_text=raw_text,
     )
@@ -117,9 +122,25 @@ class LightNavWsClient:
     SONIC environment while the model remains on a separate GPU host.
     """
 
-    def __init__(self, server_url: str, *, client_id: str = "lightnav-sonic-g1") -> None:
+    def __init__(
+        self,
+        server_url: str,
+        *,
+        client_id: str = "lightnav-sonic-g1",
+        request_timeout_s: float | None = None,
+    ) -> None:
+        if request_timeout_s is not None:
+            if isinstance(request_timeout_s, bool):
+                raise ValueError("request_timeout_s must be positive and finite")
+            try:
+                request_timeout_s = float(request_timeout_s)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("request_timeout_s must be positive and finite") from exc
+            if not math.isfinite(request_timeout_s) or request_timeout_s <= 0:
+                raise ValueError("request_timeout_s must be positive and finite")
         self.server_url = server_url
         self.client_id = client_id
+        self.request_timeout_s = request_timeout_s
         self._socket: Any | None = None
         self._seq = 0
 
@@ -130,16 +151,21 @@ class LightNavWsClient:
             from websockets.sync.client import connect
         except ImportError as exc:  # pragma: no cover - deployment-only dependency
             raise RuntimeError("websockets>=12 is required for the LightNav client") from exc
-        self._socket = connect(self.server_url, max_size=64 * 1024 * 1024)
-        self._send_expect_ok("login", {"clientId": self.client_id})
-        self._send_expect_ok("reset", {})
+        options = {"open_timeout": self.request_timeout_s} if self.request_timeout_s is not None else {}
+        self._socket = connect(self.server_url, max_size=64 * 1024 * 1024, **options)
+        try:
+            self._send_expect_ok("login", {"clientId": self.client_id})
+            self._send_expect_ok("reset", {})
+        except Exception:
+            self.close()
+            raise
         self._seq = 0
 
     def _send_expect_ok(self, action: str, data: Mapping[str, Any]) -> Mapping[str, Any]:
         if self._socket is None:
             raise RuntimeError("LightNav WebSocket is not connected")
         self._socket.send(json.dumps({"action": action, "data": dict(data)}, separators=(",", ":")))
-        raw = self._socket.recv()
+        raw = self._socket.recv(timeout=self.request_timeout_s)
         if not isinstance(raw, str):
             raise LightNavProtocolError("LightNav server sent a binary WebSocket frame")
         try:
