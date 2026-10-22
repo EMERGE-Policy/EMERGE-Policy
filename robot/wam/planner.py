@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,4 +72,14 @@ class CosmosWAMPlanner:
         decision = search_metadata(candidates, selected, score_mode=self.score_mode)
         if isinstance(response.get("conditioning"), dict):
             decision["conditioning"] = dict(response["conditioning"])
+        if isinstance(response.get("scoring"), dict):
+            decision["scoring"] = dict(response["scoring"])
+        if self.score_mode == "robometer":
+            scoring = decision.get("scoring", {})
+            if scoring.get("backend") != "robometer" or scoring.get("score_semantics") != "final_frame_task_progress":
+                raise ValueError("Robometer response is missing progress scoring provenance")
+            logging.getLogger(__name__).info(
+                "WAM selection | backend=robometer model=%s scores=%s selected_index=%s scoring_ms=%s",
+                scoring.get("model_id"), decision["candidate_scores"], selected.index, scoring.get("latency_ms"),
+            )
         return WAMPlan(np.asarray(selected.actions, dtype=np.float32), decision)

@@ -739,26 +739,15 @@ def main() -> int:
             print(f"{spec['key']} | [{category}] | {spec['instruction']}")
         return 0
 
-    if (
-        args.policy_backend == "vla"
-        and not args.skip_policy_server_check
-        and not base._server_is_ready(base.OPENPI)
-    ):
-        parser.error(
-            "VLA policy server is not reachable through discovery; "
-            "start scripts/model_server/start_external_model_servers.sh --services openpi first or pass "
-            "--skip-policy-server-check"
-        )
-    if (
-        args.policy_backend == "wam"
-        and not args.skip_wam_server_check
-        and not base._server_is_ready(base.WAM_SERVICE)
-    ):
-        parser.error(
-            "WAM policy server is not reachable through discovery; "
-            "start external_model_server/cosmos_policy_server.py first or pass "
-            "--skip-wam-server-check"
-        )
+    try:
+        checks = base._check_model_services(args, base_driver_config)
+    except RuntimeError as exc:
+        parser.error(str(exc))
+    base._atomic_write_json(output_dir / "service_checks.json", {
+        "checked_at": base._utc_now(), "services": checks,
+    })
+    for name, check in checks.items():
+        print(f"Ready: {name} at {check['endpoint']} (model={check['model_id']})", flush=True)
 
     stored_results = base._read_results(results_path)
     completed: dict[str, dict[str, Any]] = {}

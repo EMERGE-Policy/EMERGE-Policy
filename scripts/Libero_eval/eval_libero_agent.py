@@ -31,8 +31,9 @@ from Emerge.utils.action_queue import (  # noqa: E402
     parse_action_markdown,
 )
 from Emerge.utils.helpers import sync_workspace_templates  # noqa: E402
-from external_model_server.model_service.discovery import ServiceDiscovery  # noqa: E402
-from external_model_server.schemas import OPENPI  # noqa: E402
+from external_model_server.model_service.discovery import DiscoveryConfig, ServiceDiscovery  # noqa: E402
+from external_model_server.schemas import OPENPI, SAM3, VGGT  # noqa: E402
+from external_model_server.wam.robometer import DEFAULT_MODEL_PATH, RobometerClient  # noqa: E402
 from robot.mujoco_simulation.scene_io import (  # noqa: E402
     default_robot_state_doc,
     load_robot_state_doc,
@@ -45,11 +46,15 @@ DEFAULT_LIBERO_SOURCE = REPO_ROOT / "third_party/openpi/third_party/libero"
 DEFAULT_VLA_PROFILE = REPO_ROOT / "robot/profiles/libero_mujoco.md"
 DEFAULT_WAM_PROFILE = REPO_ROOT / "robot/profiles/libero_wam_mujoco.md"
 SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
+SUPPORTED_SUITES = (*SUITES, "libero_90")
 MAX_STEPS = {
     "libero_spatial": 620,
     "libero_object": 680,
     "libero_goal": 700,
     "libero_10": 920,
+    # Match the existing EMERGE budgets: upstream Cosmos's 400 plus 400
+    # actions for agent-guided execution/recovery. This is not its paper budget.
+    "libero_90": 800,
 }
 DEFAULT_MAX_AGENT_FEEDBACK_ROUNDS = 2
 DEFAULT_NUM_STEPS_WAIT = 50
@@ -258,7 +263,7 @@ def _load_benchmark_api():
 def _suite_names(raw: list[str], *, full: bool) -> list[str]:
     if full or "all" in raw:
         return list(SUITES)
-    unknown = sorted(set(raw) - set(SUITES))
+    unknown = sorted(set(raw) - set(SUPPORTED_SUITES))
     if unknown:
         raise ValueError(f"unknown suite(s): {', '.join(unknown)}")
     return list(dict.fromkeys(raw))
@@ -439,8 +444,68 @@ def _episode_driver_config(
     return config, path
 
 
-def _server_is_ready(expectation, timeout_s: float = 2.0) -> bool:
-    return ServiceDiscovery().is_ready(expectation, timeout=timeout_s)
+def _check_model_services(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    """Fail before starting paid agent turns if a required dependency is absent.
+
+    Web and CLI share these services. Robometer uses its official HTTP protocol,
+    so its URL must be explicit and match the Cosmos server's --robometer-url.
+    """
+    checks: dict[str, Any] = {}
+    errors: list[str] = []
+    required = []
+    if args.policy_backend == "wam" and not args.skip_wam_server_check:
+        required.append((WAM_SERVICE, dict(config.get("wam", {}).get("discovery", {}))))
+    if args.policy_backend == "vla" and not args.skip_policy_server_check:
+        required.append((OPENPI, dict(config.get("vla", {}).get("discovery", {}))))
+    required.extend(((VGGT, {}), (SAM3, {})))
+    for expectation, discovery_config in required:
+        try:
+            discovery = ServiceDiscovery(DiscoveryConfig(**discovery_config))
+            endpoint = discovery.resolve(expectation)
+            description = discovery.probe(endpoint, expectation=expectation)
+            expectation.check(description)
+            checks[expectation.service] = {"endpoint": endpoint, "model_id": description["model_id"]}
+        except Exception as exc:
+            errors.append(f"{expectation.service}: {exc}")
+    score_mode = config.get("wam", {}).get("search", {}).get("score_mode", "joint_value")
+    if args.policy_backend == "wam" and score_mode == "robometer":
+        if not args.robometer_url:
+            errors.append("Robometer: set --robometer-url (or ROBOMETER_URL) to the same URL used by Cosmos")
+        else:
+            client = None
+            try:
+                client = RobometerClient(args.robometer_url, model_path=args.robometer_model_path,
+                                         timeout=args.robometer_timeout)
+                info = client.check_ready()
+                checks["robometer"] = {"endpoint": client.url, "model_id": info["model_path"]}
+            except Exception as exc:
+                errors.append(f"Robometer: {exc}")
+            finally:
+                if client is not None:
+                    client.close()
+    if errors:
+        raise RuntimeError("Required model services are unavailable; no episodes started:\n  "
+                           + "\n  ".join(errors)
+                           + "\nStart Cosmos, VGGT, SAM3 and (for robometer scoring) the separate "
+                           "official Robometer HTTP server. The Web frontend is not required.")
+    return checks
+
+
+def _action_service_error(action_path: Path) -> str | None:
+    """Do not mistake a model RPC failure for a manipulation failure."""
+    try:
+        text = action_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # The agent/controller may replace ACTION.md between polling reads.
+        # A transient absence is not a model-service error; retry next poll.
+        return None
+    payload = parse_action_markdown(text)
+    document = normalize_action_document(payload) if payload else None
+    for action in (document or {}).get("actions", []):
+        result = str(action.get("result", ""))
+        if action.get("status") == "failed" and "ServiceError:" in result:
+            return result[:1000]
+    return None
 
 
 def _read_status(path: Path) -> dict[str, Any]:
@@ -861,6 +926,10 @@ def _run_episode(
                 success = reason == "success"
                 termination_reason = reason
                 break
+            service_error = _action_service_error(workspace / "ACTION.md")
+            if service_error:
+                termination_reason = f"infrastructure_error:model_service:{service_error}"
+                break
             if watchdog.poll() is not None:
                 termination_reason = f"watchdog_exit_{watchdog.returncode}"
                 break
@@ -960,6 +1029,7 @@ def _run_episode(
         "started_at": started_at,
         "finished_at": _utc_now(),
         "attempt_dir": str(attempt_dir),
+        "video_path": str(rollout_path.resolve()) if rollout_path.is_file() else None,
         **_action_metrics(workspace / "ACTION.md"),
     }
     if spec.get("dimension"):
@@ -1094,7 +1164,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--suite",
         action="append",
         default=[],
-        help="Suite name; repeat for multiple suites, or use 'all'.",
+        help="Suite name (including libero_90); repeat for multiple suites. 'all' selects the original four suites.",
     )
     parser.add_argument(
         "--task-ids",
@@ -1146,6 +1216,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--skip-policy-server-check", action="store_true")
     parser.add_argument("--skip-wam-server-check", action="store_true")
+    parser.add_argument("--robometer-url", default=os.environ.get("ROBOMETER_URL"),
+                        help="Official HTTP URL; must match the Cosmos server's --robometer-url.")
+    parser.add_argument("--robometer-model-path", default=os.environ.get("ROBOMETER_MODEL_PATH", DEFAULT_MODEL_PATH),
+                        help="Must match Robometer /model_info model_path (HF ID or local path).")
+    parser.add_argument("--robometer-timeout", type=float, default=10.0,
+                        help="Robometer readiness HTTP timeout in seconds; inference timeout belongs to Cosmos.")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument(
         "--num-steps-wait",
@@ -1275,33 +1351,22 @@ def main() -> int:
             print(f"{spec['key']} | {spec['instruction']} | {spec['bddl_file']}")
         return 0
 
-    if (
-        args.policy_backend == "vla"
-        and not args.skip_policy_server_check
-        and not _server_is_ready(OPENPI)
-    ):
-        parser.error(
-            "VLA policy server is not reachable through discovery; "
-            "start scripts/model_server/start_external_model_servers.sh --services openpi first or pass "
-            "--skip-policy-server-check"
-        )
-    if (
-        args.policy_backend == "wam"
-        and not args.skip_wam_server_check
-        and not _server_is_ready(WAM_SERVICE)
-    ):
-        parser.error(
-            "WAM policy server is not reachable through discovery; "
-            "start external_model_server/cosmos_policy_server.py first or pass "
-            "--skip-wam-server-check"
-        )
+    try:
+        checks = _check_model_services(args, base_driver_config)
+    except RuntimeError as exc:
+        parser.error(str(exc))
+    _atomic_write_json(output_dir / "service_checks.json", {"checked_at": _utc_now(), "services": checks})
+    for name, check in checks.items():
+        print(f"Ready: {name} at {check['endpoint']} (model={check['model_id']})", flush=True)
 
     completed = _read_results(results_path)
     pending_specs: list[tuple[int, dict[str, Any]]] = []
     for index, spec in enumerate(specs, start=1):
-        if args.resume and spec["key"] in completed:
+        if args.resume and spec["key"] in completed and not _is_infrastructure_error(completed[spec["key"]]):
             print(f"[{index}/{len(specs)}] skip completed {spec['key']}")
             continue
+        if args.resume and spec["key"] in completed:
+            print(f"[{index}/{len(specs)}] retry infrastructure error {spec['key']}")
         pending_specs.append((index, spec))
 
     infrastructure_failed = False
