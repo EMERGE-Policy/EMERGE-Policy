@@ -46,10 +46,15 @@ WAM_T5_EMBEDDINGS="${WAM_T5_EMBEDDINGS:-${REPO_ROOT}/checkpoints/cosmos-policy/l
 WAM_CONFIG_FILE="${WAM_CONFIG_FILE:-cosmos_policy/config/config.py}"
 WAM_PYTHONPATH="${WAM_PYTHONPATH:-${REPO_ROOT}/third_party/cosmos-policy}"
 WAM_EMBEDDING_MODE="${WAM_EMBEDDING_MODE:-cache-only}"
+ROBOMETER_URL="${ROBOMETER_URL:-}"
+ROBOMETER_MODEL_PATH="${ROBOMETER_MODEL_PATH:-jesbu1/robometer-4b-fft-libero}"
+ROBOMETER_TIMEOUT="${ROBOMETER_TIMEOUT:-120}"
+ROBOMETER_VIEW="${ROBOMETER_VIEW:-primary}"
 WAM_GENERATED_T5_CACHE="${WAM_GENERATED_T5_CACHE:-${REPO_ROOT}/artifacts/t5_embeddings/generated.pkl}"
 T5_MODEL_NAME_OR_PATH="${T5_MODEL_NAME_OR_PATH:-google-t5/t5-11b}"
 T5_MODEL_REVISION="${T5_MODEL_REVISION:-main}"
 T5_CACHE_DIR="${T5_CACHE_DIR:-${HF_HOME:-}}"
+T5_DEVICE="${T5_DEVICE:-cuda}"
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 
@@ -142,6 +147,10 @@ Cosmos Policy WAM:
   WAM_PYTHONPATH                Cosmos Policy source directory
                                 (default: <repo>/third_party/cosmos-policy)
   WAM_EMBEDDING_MODE            T5 embedding mode (default: cache-only)
+  ROBOMETER_URL                Official Robometer HTTP base URL (empty disables external scoring)
+  ROBOMETER_MODEL_PATH         Must match its model_path (default: jesbu1/robometer-4b-fft-libero)
+  ROBOMETER_TIMEOUT            HTTP request timeout seconds (default: 120)
+  ROBOMETER_VIEW               primary (default) or wrist; two frames from one view
   WAM_GENERATED_T5_CACHE        Writable generated-embedding cache
                                 (default: <repo>/artifacts/t5_embeddings/
                                 generated.pkl)
@@ -150,6 +159,8 @@ Cosmos Policy WAM:
   T5_MODEL_REVISION             T5 model revision (default: main)
   T5_CACHE_DIR                  Hugging Face/T5 cache directory
                                 (default: HF_HOME when set, otherwise empty)
+  T5_DEVICE                     Online T5 device within WAM_GPU (default: cuda)
+                                e.g. WAM_GPU=4,5 T5_DEVICE=cuda:1 uses GPU 5
 
 JAX:
   XLA_PYTHON_CLIENT_PREALLOCATE Allow JAX GPU-memory preallocation
@@ -485,6 +496,7 @@ if service_enabled cosmos; then
         --generated-t5-cache "${WAM_GENERATED_T5_CACHE}"
         --t5-model-name-or-path "${T5_MODEL_NAME_OR_PATH}"
         --t5-revision "${T5_MODEL_REVISION}"
+        --t5-device "${T5_DEVICE}"
         --config-file "${WAM_CONFIG_FILE}"
         --host 127.0.0.1
         --port "${WAM_PORT}"
@@ -495,6 +507,12 @@ if service_enabled cosmos; then
     )
     if [[ -n "${T5_CACHE_DIR}" ]]; then
         wam_command+=(--t5-cache-dir "${T5_CACHE_DIR}")
+    fi
+    if [[ -n "${ROBOMETER_URL}" ]]; then
+        wam_command+=(--robometer-url "${ROBOMETER_URL}"
+            --robometer-model-path "${ROBOMETER_MODEL_PATH}"
+            --robometer-timeout "${ROBOMETER_TIMEOUT}"
+            --robometer-view "${ROBOMETER_VIEW}")
     fi
     if [[ -n "${WAM_PYTHON}" ]]; then
         start_server_with_python_in_directory \

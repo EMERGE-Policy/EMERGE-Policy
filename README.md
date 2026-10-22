@@ -153,9 +153,13 @@ python -m pip install --upgrade huggingface_hub
 hf download Sylvest/LIBERO-plus assets.zip \
   --repo-type dataset \
   --local-dir /tmp/libero-plus-assets
-unzip -q /tmp/libero-plus-assets/assets.zip \
-  -d third_party/libero_plus/libero/libero
+python scripts/LiberoPlus_eval/install_assets.py \
+  --archive /tmp/libero-plus-assets/assets.zip
 ```
+
+The installer strips the upstream ZIP's directory prefix so files land directly
+in `third_party/libero_plus/libero/libero/assets/`. Wait for `Assets installed`
+before evaluating. Re-running the command resumes an interrupted extraction.
 
 ### 3. Install the Main `EmergePolicy` Environment
 
@@ -309,6 +313,14 @@ loading independent from individual agent episodes.
 
 For additional startup options and health-check endpoints, see
 [`scripts/model_server/README.md`](scripts/model_server/README.md).
+
+To keep Cosmos candidate generation and rank predicted futures with independent
+Robometer last-frame task progress, see the
+[Robometer setup and validation guide](scripts/model_server/ROBOMETER.md).
+Select `wam.search.score_mode: robometer`; the original `joint_value` mode
+remains the default. Robometer runs in a separate environment and HTTP service.
+For the full EMERGE agent on the four ten-task LIBERO suites (one trial each,
+with video), see the [40-task evaluation instructions](scripts/Libero_eval/README.md#full-emerge--robometer-40-tasks-one-trial-each).
 
 ## Evaluation
 

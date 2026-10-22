@@ -31,6 +31,7 @@ from external_model_server.wam.t5 import (
     T5EmbeddingCache,
     validate_embedding,
 )
+from external_model_server.wam.robometer import DEFAULT_MODEL_PATH, RobometerClient, rgb_image
 from robot.wam.protocol import (
     REQUEST_SCHEMA,
     RESPONSE_SCHEMA,
@@ -94,6 +95,11 @@ class CosmosPolicyRuntime:
         self.device = "unknown"
         self.generated_t5_cache: T5EmbeddingCache | None = None
         self.t5_encoder: CosmosT5Encoder | None = None
+        self.robometer = (
+            RobometerClient(args.robometer_url, model_path=args.robometer_model_path,
+                            timeout=args.robometer_timeout, view=args.robometer_view)
+            if getattr(args, "robometer_url", "") else None
+        )
 
     def load(self) -> None:
         for name in (
@@ -228,8 +234,10 @@ class CosmosPolicyRuntime:
         logger.info("Cosmos Policy WAM ready: device=%s", self.device)
 
     def infer(self, request: dict[str, Any]) -> dict[str, Any]:
-        observation, embedding, conditioning = self._prepare_request(request)
         candidate_request = request["candidate_request"]
+        if candidate_request["score_mode"] == "robometer" and self.robometer is None:
+            raise ProtocolError("robometer mode requires --robometer-url", code="robometer_not_configured")
+        observation, embedding, conditioning = self._prepare_request(request)
         self.cfg.num_queries_best_of_n = candidate_request["num_candidates"]
         started = time.perf_counter()
         candidates = [
@@ -239,13 +247,34 @@ class CosmosPolicyRuntime:
             )
             for index in range(candidate_request["num_candidates"])
         ]
-        return self._response(candidates, candidate_request, conditioning, started, 1)
+        scoring = None
+        if candidate_request["score_mode"] == "robometer":
+            current_frames = [candidate.pop("_current_frame") for candidate in candidates]
+            # Every candidate must share the exact same observed frame after the
+            # upstream deterministic JPEG/resize/crop preprocessing.
+            if any(not np.array_equal(current_frames[0], frame) for frame in current_frames[1:]):
+                raise ProtocolError("Cosmos candidates did not share the same current frame",
+                                    code="invalid_model_output")
+            scores, scoring = self.robometer.score(
+                current_frames[0], [candidate.pop("_future_frame") for candidate in candidates],
+                request["task_instruction"], [candidate["index"] for candidate in candidates],
+            )
+            for candidate, score in zip(candidates, scores, strict=True):
+                candidate["score"] = score
+        response = self._response(candidates, candidate_request, conditioning, started, 1)
+        if scoring is not None:
+            response["scoring"] = scoring
+        return response
 
     def infer_batch(self, requests: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         if not requests:
             return []
         if len(requests) == 1:
             return [self.infer(requests[0])]
+        if any(request["candidate_request"]["score_mode"] == "robometer" for request in requests):
+            raise ProtocolError("robometer scoring requires single-environment inference; "
+                                "the scheduler must use singleton batch keys",
+                                code="unsupported_score_batch")
         candidate_request = requests[0]["candidate_request"]
         if any(request["candidate_request"] != candidate_request for request in requests):
             raise ValueError("Batched requests must use the same candidate settings")
@@ -359,7 +388,7 @@ class CosmosPolicyRuntime:
         index: int,
         score_mode: str,
     ) -> dict[str, Any]:
-        generate_value = score_mode == "joint_value"
+        generate_value = score_mode in {"joint_value", "robometer"}
         result = self.cosmos_utils.get_action(
             self.cfg,
             self.model,
@@ -395,12 +424,30 @@ class CosmosPolicyRuntime:
                 ),
             )
             score = float(q_result["value_prediction"])
-        return {
+        candidate = {
             "index": index,
             "seed": seed,
             "actions": result["actions"],
             "score": score,
         }
+        if score_mode == "robometer":
+            # Pinned Cosmos get_action returns a dict for a single observation.
+            # Its native multi-observation adapter does not decode future images.
+            view = self.robometer.view
+            predictions = result.get("future_image_predictions")
+            key = "future_image" if view == "primary" else "future_wrist_image"
+            if not isinstance(predictions, dict) or key not in predictions:
+                raise ProtocolError(f"Cosmos candidate {index} is missing {key}",
+                                    code="missing_future_image")
+            # get_action provides the EXACT current JPEG/resize/center-cropped
+            # image used in the latent sequence: wrist index 0, primary index 1.
+            images = result.get("all_camera_images")
+            if images is None or len(images) != 2:
+                raise ProtocolError("Cosmos current images require the LIBERO two-camera layout",
+                                    code="invalid_model_output")
+            candidate["_current_frame"] = rgb_image(images[1 if view == "primary" else 0], "Cosmos current image")
+            candidate["_future_frame"] = rgb_image(predictions[key], "Cosmos predicted future image")
+        return candidate
 
 
 class CosmosPolicyInferenceService:
@@ -408,6 +455,7 @@ class CosmosPolicyInferenceService:
 
     def __init__(self, runtime: CosmosPolicyRuntime) -> None:
         self.runtime = runtime
+        self._robometer_batch_notice = False
 
     @property
     def descriptor(self) -> ServiceDescriptor:
@@ -418,6 +466,8 @@ class CosmosPolicyInferenceService:
         self.runtime.load()
 
     def close(self) -> None:
+        if self.runtime.robometer is not None:
+            self.runtime.robometer.close()
         self.runtime.model = None
         self.runtime.t5_encoder = None
         self.runtime.generated_t5_cache = None
@@ -435,10 +485,17 @@ class CosmosPolicyInferenceService:
             raise ProtocolError("Cosmos requires equally sized square primary and wrist images")
         if candidate["score_mode"] == "q_value" and not self.runtime.args.enable_q_value:
             raise ProtocolError("q_value scoring is disabled", code="unsupported_score_mode")
+        if candidate["score_mode"] == "robometer":
+            if self.runtime.robometer is None:
+                raise ProtocolError("robometer mode requires --robometer-url", code="robometer_not_configured")
+            if not self._robometer_batch_notice:
+                logger.info("Robometer mode uses singleton environment requests; "
+                            "each environment's candidates are scored together over HTTP")
+                self._robometer_batch_notice = True
         # Advanced samplers keep their original singleton behavior. Uncached
         # text is isolated too, so a cache miss cannot fail other workers.
         if (
-            candidate["score_mode"] == "q_value"
+            candidate["score_mode"] in {"q_value", "robometer"}
             or self.runtime.cfg.use_variance_scale
             or self.runtime.model.config.use_flowunipc_scheduler
             or normalized["conditioning_text"] not in self.runtime.cosmos_utils.t5_text_embeddings_cache
@@ -534,6 +591,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--use-ensemble-qvalue-predictions", action="store_true")
     parser.add_argument("--enable-q-value", action="store_true")
+    parser.add_argument("--robometer-url", default="", help="Official HTTP server base URL; no service discovery")
+    parser.add_argument("--robometer-model-path", default=DEFAULT_MODEL_PATH,
+                        help="Must match the official server's model_path (Hub ID or local directory)")
+    parser.add_argument("--robometer-timeout", type=float, default=120.0)
+    parser.add_argument("--robometer-view", choices=("primary", "wrist"), default="primary")
     parser.add_argument("--model-name", default="Cosmos-Policy-LIBERO-Predict2-2B")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8003)
@@ -569,6 +631,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit("--num-open-loop-steps must be in [1, --chunk-size]")
     if args.parallel_timeout <= 0:
         raise SystemExit("--parallel-timeout must be positive")
+    if not math.isfinite(args.robometer_timeout) or args.robometer_timeout <= 0:
+        raise SystemExit("--robometer-timeout must be positive and finite")
     runtime = CosmosPolicyRuntime(args)
     ModelServerRuntime(
         CosmosPolicyInferenceService(runtime), host=args.host, port=args.port,

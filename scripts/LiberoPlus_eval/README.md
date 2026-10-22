@@ -24,6 +24,112 @@ See [environment installation](../../README.md#installation) in the
 root README for the setup command. These dependencies are loaded even when
 tasks are enumerated with `--dry-run`.
 
+The official ZIP may contain a long `inspire/hdd/.../assets/` prefix. Use the
+installer rather than assuming `unzip -d` creates a top-level `assets/`:
+
+```bash
+cd /private/Emerge-Policy
+conda activate EmergePolicy
+# If not downloaded yet:
+hf download Sylvest/LIBERO-plus assets.zip --repo-type dataset --local-dir /tmp/libero-plus-assets
+python scripts/LiberoPlus_eval/install_assets.py --archive /tmp/libero-plus-assets/assets.zip
+```
+
+On this machine the ZIP already exists at `/tmp/libero-plus-assets/assets.zip`;
+skip the download. It contains 448,799 files, about 9 GB after decompression, so
+extraction can take time on the shared filesystem. The installer prints progress,
+removes the packaging prefix, preserves the asset contents, and resumes files
+already extracted with the expected size. Wait for `Assets installed` before
+starting the evaluator. `--inspect` checks the archive layout without extracting.
+
+## Cosmos + Robometer: 50 tasks in each of seven dimensions
+
+`--dimension all --count 50 --trials-per-task 1` selects 350 distinct perturbed
+tasks in total: 50 per dimension, each run once. It does not run each task 50
+times. Selection is reproducible for seed 7 and balanced across the four suites.
+This is a subset of the 10,030-task benchmark; report the count and seed.
+
+The provided `dev/libero_plus_robometer_eval.json` retains the Plus data source,
+selects four Cosmos candidates scored by Robometer, and uses a 600-second WAM
+client timeout. Both models use existing weights; no training is required.
+
+Keep Robometer, VGGT and SAM3 running. To start them if absent:
+
+```bash
+# Separate terminal: official Robometer server.
+ROBOMETER_REPO=/private/robometer ROBOMETER_GPU=3 \
+ROBOMETER_MODEL_PATH=/private/Emerge-Policy/checkpoints/robometer-4b-fft-libero \
+bash scripts/model_server/start_robometer_server.sh
+
+# Another terminal, only if perception services are absent:
+PERCEPTION_ENV=EmergePolicy VGGT_GPU=1 SAM3_GPU=2 \
+bash scripts/model_server/start_external_model_servers.sh --services vggt,sam3
+```
+
+Stop the existing Cosmos service before restarting it on port 8003. Standard
+LIBERO's `cache-only` setup cannot encode unseen Language Instructions tasks.
+Use the existing online T5 encoder on physical GPU 5, with Cosmos on GPU 4:
+
+```bash
+cd /private/Emerge-Policy
+env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY \
+    -u https_proxy -u http_proxy -u all_proxy \
+  WAM_PYTHON=/private/cosmos-policy/.venv/bin/python \
+  WAM_PYTHONPATH=/private/cosmos-policy \
+  WAM_GPU=4,5 T5_DEVICE=cuda:1 \
+  WAM_EMBEDDING_MODE=cache-then-online \
+  T5_CACHE_DIR=/private/Emerge-Policy/checkpoints/huggingface \
+  ROBOMETER_URL=http://127.0.0.1:8100 \
+  ROBOMETER_MODEL_PATH=/private/Emerge-Policy/checkpoints/robometer-4b-fft-libero \
+  bash scripts/model_server/start_external_model_servers.sh --services cosmos
+```
+
+The proxy variables are removed for this model-server command because this
+machine's configured proxy was unavailable. The first online-T5 startup downloads
+`google-t5/t5-11b` if absent. This is a large additional text encoder; wait for
+Cosmos **READY** before starting evaluation. It caches generated task embeddings
+in `artifacts/t5_embeddings/generated.pkl`. A healthy `cache-only` Cosmos server
+does not establish that new Plus language instructions can be encoded.
+
+After asset installation, enumerate all 350 selections without LLM/model calls:
+
+```bash
+cd /private/Emerge-Policy
+conda activate EmergePolicy
+bash scripts/LiberoPlus_eval/run_robometer_plus.sh --dry-run
+```
+
+Run the complete EMERGE agent, with two environments and per-episode video:
+
+```bash
+bash scripts/LiberoPlus_eval/run_robometer_plus.sh
+```
+
+It checks Cosmos, VGGT, SAM3 and the explicit Robometer HTTP URL/model identity
+before launching episodes. The default output is
+`artifacts/emerge_robometer_plus_350/`. Set `EVAL_WORKERS` or `EVAL_OUTPUT_DIR` to
+change execution/output settings. Resume the same selection with:
+
+```bash
+bash scripts/LiberoPlus_eval/run_robometer_plus.sh --resume
+```
+
+Infrastructure-error attempts are retried and excluded from success-rate
+denominators; completed task outcomes are skipped. For an optional short pipeline
+check, use a separate output and `PLUS_TASKS_PER_DIMENSION=1` with
+`--max-steps 16`; this does not measure full-task success.
+
+Results include root and per-dimension `summary.json`, per-task `results.jsonl`,
+`libero_plus_grid.md/json`, and each attempt's `rollout.mp4` (its absolute path is
+in `video_path`). Seven completed dimensions have 50 valid episodes each, so each
+dimension's rate is successes/50 and the overall rate is successes/350. Do not
+treat a partial run or an infrastructure error as a completed 350-task benchmark.
+
+The installer, selection/output logic and shared service-check wiring have local
+automated checks. Those mock episode execution; they do not establish a real
+Cosmos + Robometer + LIBERO-Plus end-to-end result. The downloaded assets and
+online T5 startup are required before a real smoke test or benchmark.
+
 ## 1. Start services (terminal 1)
 
 ### WAM (default)

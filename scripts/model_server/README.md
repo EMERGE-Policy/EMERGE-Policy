@@ -1,5 +1,9 @@
 # External Model Servers
 
+For independent Robometer scoring of Cosmos candidate futures, see
+[the Robometer integration guide](ROBOMETER.md). It uses the official persistent
+HTTP server and a selectable `robometer` mode; existing score modes are retained.
+
 Run from the repository root. Complete the [installation](../../README.md#installation)
 and [checkpoint setup](../../README.md#model-checkpoints) first.
 
@@ -136,7 +140,8 @@ scoring; other configurations use single-request inference.
 ## Optional: WAM phase conditioning
 
 Task conditioning with the official T5 cache is the default. To use `phase`
-or `task_with_phase`, start WAM with online T5 encoding:
+or `task_with_phase`, or to encode uncached LIBERO-90 task instructions,
+start WAM with online T5 encoding:
 
 ```bash
 WAM_GPU=0 \
@@ -148,6 +153,10 @@ bash scripts/model_server/start_external_model_servers.sh --services cosmos,vggt
 
 Then pass `--wam-conditioning-mode phase` or
 `--wam-conditioning-mode task_with_phase` to LIBERO or LIBERO-Plus evaluation.
+LIBERO-90 can retain `--wam-conditioning-mode task`: online encoding fills
+missing full-task texts. Set `WAM_GPU=4,5 T5_DEVICE=cuda:1` to put the text
+encoder on the second visible GPU. The first startup may download the separate
+`google-t5/t5-11b` weights; generated embeddings are cached for later requests.
 
 ## Other settings
 
