@@ -37,6 +37,8 @@ Tsinghua University · Nanjing University of Science and Technology · Xi'an Jia
 
 ##  What's New
 
+- **[October 13, 2026]** We introduce Value Model support to EMERGE-Policy! This new capability enables value-based evaluation of robot states and task progress, providing an additional signal for decision-making and execution monitoring. By integrating value estimation into the embodied agent framework, EMERGE-Policy takes another step toward more reliable, adaptive, and value-guided closed-loop robot control.
+
 -  **[October 1, 2026]** We release EMERGE-Policy v1.0.0 with a new Web console!
   Run `emerge web` to manage robot tasks from the browser with live camera views,
   conversation and task progress, searchable scene selection, and reset and switch
