@@ -29,3 +29,8 @@ artifacts/
 .DS_Store
 .ruff_cache/
 .agents/
+
+/tmp/
+!/tests/
+/tests/*
+!/tests/ac_wm/

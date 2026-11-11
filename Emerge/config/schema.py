@@ -1,6 +1,7 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -103,6 +104,16 @@ class SubagentsConfig(Base):
     )
 
 
+class AcWmConfig(Base):
+    """Optional Cosmos3 candidate evaluation, independent of the WAM backend."""
+
+    enabled: bool = False
+    judge_model: str = "gpt-6-astra"
+    judge_provider: str = "custom"
+    dispatch_mode: Literal["evaluated_prefix", "skill"] = "evaluated_prefix"
+    on_no_positive: Literal["reject", "planner_priority"] = "reject"
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -152,6 +163,11 @@ class ToolsConfig(Base):
 class Config(BaseSettings):
     """Root configuration for Emerge."""
 
+    ac_wm: AcWmConfig = Field(
+        default_factory=AcWmConfig,
+        validation_alias=AliasChoices("ac_wm", "acWm"),
+        serialization_alias="acWm",
+    )
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     visual_monitor: VisualMonitorConfig = Field(default_factory=VisualMonitorConfig)
     model_services: ModelServicesConfig = Field(

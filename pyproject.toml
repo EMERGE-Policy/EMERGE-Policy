@@ -55,6 +55,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ac-wm = [
+    "scipy>=1.11,<2",
+    "opencv-python-headless>=4.8,<4.12",
+]
 web = [
     "fastapi>=0.115,<1.0",
     "uvicorn>=0.34,<1.0",
@@ -80,6 +84,7 @@ matrix = [
     "nh3>=0.2.17,<1.0.0",
 ]
 dev = [
+    "pytest>=8,<10",
     "ruff>=0.1.0",
     "matrix-nio[e2e]>=0.25.2",
     "mistune>=3.0.0,<4.0.0",

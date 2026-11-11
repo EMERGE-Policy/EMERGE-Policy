@@ -163,6 +163,21 @@ class VLAExecutor:
                 server_queue_seconds,
             )
 
+    def propose(self, instruction: str, horizon: int) -> np.ndarray:
+        """Return a live OpenPI action proposal without stepping the environment."""
+        client = self._get_client()
+        health_check = getattr(client, "health_check", None)
+        if callable(health_check) and not health_check():
+            raise RuntimeError("policy server health check failed")
+        result = client.infer(self._build_element(instruction))
+        chunk = np.asarray(result.get("actions"), dtype=np.float32)
+        if chunk.ndim != 2 or chunk.shape[1] != 7 or len(chunk) == 0:
+            raise ValueError(f"openpi returned action shape {chunk.shape}, expected non-empty (chunk, 7)")
+        if not np.all(np.isfinite(chunk)):
+            raise ValueError("openpi returned non-finite action values")
+        return chunk[:max(1, min(int(horizon), len(chunk)))].copy()
+
+
     def close(self) -> None:
         if self._client is not None and self._owns_client:
             close = getattr(self._client, "close", None)

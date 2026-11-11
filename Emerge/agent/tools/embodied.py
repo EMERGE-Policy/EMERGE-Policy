@@ -15,6 +15,7 @@ try:
 except ImportError:  # pragma: no cover - fallback for lightweight test envs
     logger = logging.getLogger(__name__)
 
+from Emerge.ac_wm.actions import AcWmActionMixin
 from Emerge.base import Tool
 from Emerge.utils.action_queue import (
     action_timestamp,
@@ -37,7 +38,7 @@ _WAM_INFERENCE_TIMEOUT_S = 180.0
 _WAM_PER_STEP_TIMEOUT_S = 2.0
 
 
-class EmbodiedActionTool(Tool):
+class EmbodiedActionTool(AcWmActionMixin, Tool):
     """Validate embodied actions and dispatch them through the workspace queue."""
 
     @property
@@ -71,7 +72,8 @@ class EmbodiedActionTool(Tool):
             "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport. "
             "Choose concrete poses, line segments, arc geometry, and gripper openings from the latest ROBOT_STATE.md or a successful object_location result. "
             f"{policy_guidance}"
-            "Every tool call MUST include a non-empty `parameters` object. "
+            + (self._ac_wm_policy_text() if self.ac_wm_subagent is not None else "")
+            + "Every tool call MUST include a non-empty `parameters` object. "
             "Do not call this tool with only `action_type` and `reasoning`."
         )
 
@@ -108,7 +110,7 @@ class EmbodiedActionTool(Tool):
                 "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
                 "- wam_execute: {phase_instruction: 'grasp and lift the red block', step: 48}"
             )
-        return {
+        schema = {
             "type": "object",
             "properties": {
                 "action_type": {
@@ -150,11 +152,19 @@ class EmbodiedActionTool(Tool):
             "required": ["action_type", "parameters", "reasoning"],
         }
 
+        if self.ac_wm_subagent is not None:
+            from Emerge.ac_wm.actions import extend_action_schema
+
+            extend_action_schema(schema)
+        return schema
+
     def __init__(
         self,
         workspace: Path,
         visual_interrupts: VisualInterruptCoordinator | None = None,
+        ac_wm_subagent=None,
     ):
+        self.ac_wm_subagent = ac_wm_subagent
         self.workspace = workspace
         self.visual_interrupts = visual_interrupts
         self.active_action_ids: set[str] = set()
@@ -166,7 +176,20 @@ class EmbodiedActionTool(Tool):
         parameters: dict[str, Any],
         reasoning: str,
     ) -> str:
-        """Validate and enqueue an action in the active workspace."""
+        """Invoke AC-WM explicitly; ordinary VLA, WAM and geometry actions stay direct."""
+        if action_type == "ac_wm_select" and self.ac_wm_subagent is not None:
+            return await self._execute_action_through_ac_wm(action_type, parameters, reasoning)
+        if action_type in {
+            "ac_wm_select", "capture_ac_wm_observation", "vla_propose",
+            "rule_propose", "execute_action_chunk",
+        }:
+            return "Error: AC-WM internal action; enable AC-WM and use ac_wm_select."
+        return await self._dispatch_action(action_type, parameters, reasoning)
+
+    async def _dispatch_action(
+        self, action_type: str, parameters: dict[str, Any], reasoning: str
+    ) -> str:
+        """Enqueue an action through the existing controller lifecycle."""
         embodied_file = self.workspace / "EMBODIED.md"
         action_file = self.workspace / "ACTION.md"
 

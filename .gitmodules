@@ -27,3 +27,7 @@
 [submodule "third_party/cosmos-policy"]
 	path = third_party/cosmos-policy
 	url = https://github.com/NVlabs/cosmos-policy.git
+
+[submodule "third_party/cosmos-framework"]
+	path = third_party/cosmos-framework
+	url = https://github.com/NVIDIA/cosmos-framework.git
