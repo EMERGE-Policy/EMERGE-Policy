@@ -81,6 +81,9 @@ class AgentLoop:
         ) = None,
         visual_monitor_config: VisualMonitorConfig | None = None,
         model_services_config=None,
+        ac_wm_rollout=None,
+        ac_wm_judge=None,
+        ac_wm_settings=None,
     ):
         from Emerge.config.schema import (
             ExecToolConfig,
@@ -161,6 +164,10 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
         )
+        self._ac_wm_rollout = ac_wm_rollout
+        self._ac_wm_judge = ac_wm_judge
+        self._ac_wm_settings = ac_wm_settings
+        self.ac_wm_subagent = None
         self._register_default_tools()
         # Load env variables
         try:
@@ -190,7 +197,6 @@ class AgentLoop:
             path_append=self.exec_config.path_append,
         ))
         self.tools.register(MessageTool())
-        self.tools.register(DelegateSubagentTool(self.subagent_registry))
 
         action_tool = EmbodiedActionTool(
             workspace=self.workspace,
@@ -198,6 +204,21 @@ class AgentLoop:
                 self.visual_interrupts if self.visual_monitor is not None else None
             ),
         )
+        if self._ac_wm_rollout is not None and self._ac_wm_judge is not None:
+            from Emerge.ac_wm.register import register_ac_wm
+
+            self.ac_wm_subagent = register_ac_wm(
+                self.subagent_registry,
+                provider=self.provider,
+                rollout=self._ac_wm_rollout,
+                judge=self._ac_wm_judge,
+                candidate_provider=action_tool.propose_action_candidates,
+                dispatch=action_tool.dispatch_selected_candidate,
+                dispatch_mode=getattr(self._ac_wm_settings, "dispatch_mode", "evaluated_prefix"),
+                on_no_positive=getattr(self._ac_wm_settings, "on_no_positive", "reject"),
+            )
+            action_tool.ac_wm_subagent = self.ac_wm_subagent
+        self.tools.register(DelegateSubagentTool(self.subagent_registry, hidden_agents=("ac-wm",)))
         self.tools.register(action_tool)
 
     def _emit(self, kind: str, data: dict) -> None:

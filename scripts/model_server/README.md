@@ -1,5 +1,9 @@
 # External Model Servers
 
+For the additional Cosmos3 forward-dynamics service (`cosmos3_ac_wm`, port 8773),
+see the [AC-WM operation guide](../../docs/ac-wm/operation.md). It runs separately
+from the Cosmos Policy WAM service.
+
 For independent Robometer scoring of Cosmos candidate futures, see
 [the Robometer integration guide](ROBOMETER.md). It uses the official persistent
 HTTP server and a selectable `robometer` mode; existing score modes are retained.

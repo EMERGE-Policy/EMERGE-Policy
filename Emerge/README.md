@@ -403,6 +403,14 @@ For VLA, the agent provides a phase-local natural-language instruction and a ste
 
 Each accepted action is appended to `ACTION.md`. The controller executes it, updates its status, and refreshes `ROBOT_STATE.md`. The tool waits for a terminal action result and participates in runtime cancellation, so a run cannot report clean completion while robot actions remain active.
 
+### Optional AC-WM selection
+
+With `acWm.enabled: true` (or `EMERGE_AC_WM=1`), `execute_robot_action` also
+accepts `ac_wm_select`. It compares explicit VLA/geometric proposals with
+Cosmos3 predictions and an independent VLM judge. AC-WM runs alongside the
+VLA and WAM paths; ordinary actions remain direct. See the
+[AC-WM guide](../docs/ac-wm/README.md).
+
 ## Specialist sub-agents
 
 ### Object location

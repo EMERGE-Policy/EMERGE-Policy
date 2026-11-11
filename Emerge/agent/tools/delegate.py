@@ -12,8 +12,9 @@ from Emerge.subagents import SubagentRegistry, SubagentTask, TextContent
 
 
 class DelegateSubagentTool(Tool):
-    def __init__(self, registry: SubagentRegistry) -> None:
+    def __init__(self, registry: SubagentRegistry, *, hidden_agents: tuple[str, ...] = ()) -> None:
         self._registry = registry
+        self._hidden_agents = frozenset(hidden_agents)
 
     @property
     def name(self) -> str:
@@ -22,7 +23,7 @@ class DelegateSubagentTool(Tool):
     @property
     def description(self) -> str:
         agents = "; ".join(
-            f"{item.name}: {item.description}" for item in self._registry.list()
+            f"{item.name}: {item.description}" for item in self._registry.list() if item.name not in self._hidden_agents
         )
         return (
             "Delegate a focused task to a registered specialist and wait for "
@@ -36,7 +37,7 @@ class DelegateSubagentTool(Tool):
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "enum": list(self._registry.names),
+                    "enum": [name for name in self._registry.names if name not in self._hidden_agents],
                     "description": "Registered specialist name",
                 },
                 "task": {
@@ -49,6 +50,8 @@ class DelegateSubagentTool(Tool):
         }
 
     async def execute(self, agent_name: str, task: str) -> str:
+        if agent_name in self._hidden_agents:
+            return f"Error: {agent_name} is invoked through execute_robot_action."
         result = await self._registry.run(
             agent_name,
             SubagentTask(content=(TextContent(task),)),

@@ -15,12 +15,14 @@ from Emerge.runtime.storage import RunArtifacts, WorkspaceLease, redact
 
 
 def build_agent(config):
+    from Emerge.ac_wm.runtime import build_components
     from Emerge.agent.loop import AgentLoop
     from Emerge.bus.queue import MessageBus
     from Emerge.providers.factory import create_provider
     from Emerge.utils.helpers import sync_workspace_templates
 
     sync_workspace_templates(config.workspace_path, silent=True)
+    ac_wm_rollout, ac_wm_judge = build_components(config)
     return AgentLoop(
         bus=MessageBus(), provider=create_provider(config), workspace=config.workspace_path,
         model=config.agents.defaults.model,
@@ -31,6 +33,9 @@ def build_agent(config):
         task_verification_subagent_config=config.subagents.task_verification,
         visual_monitor_config=config.visual_monitor,
         model_services_config=config.model_services,
+        ac_wm_rollout=ac_wm_rollout,
+        ac_wm_judge=ac_wm_judge,
+        ac_wm_settings=config.ac_wm,
     )
 
 

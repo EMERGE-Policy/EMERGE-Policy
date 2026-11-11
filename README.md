@@ -324,6 +324,14 @@ remains the default. Robometer runs in a separate environment and HTTP service.
 For the full EMERGE agent on the four ten-task LIBERO suites (one trial each,
 with video), see the [40-task evaluation instructions](scripts/Libero_eval/README.md#full-emerge--robometer-40-tasks-one-trial-each).
 
+## Optional Cosmos3 AC-WM
+
+AC-WM adds action-conditioned Cosmos3 prediction alongside the OpenPI VLA and
+Cosmos Policy WAM paths. The main agent can explicitly compare skill proposals
+from the same observation, score their predicted futures with a VLM, and
+execute the selected action. See the [AC-WM guide](docs/ac-wm/README.md) for
+configuration, execution modes and tests.
+
 ## Evaluation
 
 - [Standard LIBERO Evaluation](scripts/Libero_eval/README.md)

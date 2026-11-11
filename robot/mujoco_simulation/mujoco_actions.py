@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from robot.mujoco_simulation.ac_wm import AcWmControllerMixin
 from robot.mujoco_simulation.pose_utils import PoseUtils
 
 
@@ -14,7 +15,7 @@ class _ActionInterrupted(Exception):
     pass
 
 
-class MujocoActionController:
+class MujocoActionController(AcWmControllerMixin):
     """Translate Emerge rule actions into direct LIBERO action7 steps."""
 
     def __init__(
@@ -67,6 +68,7 @@ class MujocoActionController:
     ) -> str:
         policy_backend = {
             "vla_execute": "vla",
+            "vla_propose": "vla",
             "wam_execute": "wam",
         }.get(action_type)
         if (
@@ -81,6 +83,10 @@ class MujocoActionController:
             "follow_arc": self._follow_arc,
             "vla_execute": self._vla_execute,
             "wam_execute": self._wam_execute,
+            "capture_ac_wm_observation": self._capture_ac_wm_observation,
+            "vla_propose": self._vla_propose,
+            "rule_propose": self._rule_propose,
+            "execute_action_chunk": self._execute_action_chunk,
         }
         handler = handlers.get(action_type)
         if handler is None:
